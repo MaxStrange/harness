@@ -53,6 +53,12 @@ class Entry:
     name: str
     path: str
     is_dir: bool
+    is_parent: bool = False  # the ".." entry: goes up instead of expanding
+
+
+PARENT_NAME = ".."
+WHEEL_STEP_DEGREES = 15.0  # wheel travel per item step: one notch
+PIXEL_STEP = 40.0  # touchpad pixel travel per item step
 
 
 @dataclass
@@ -117,6 +123,7 @@ class OrbitExplorer(QWidget):
         self._root = root
         self._hover_dx = 0.0
         self._hovering = False
+        self._wheel_accum = 0.0
         self._snap_target: float | None = None
         self._timer = QTimer(self)
         self._timer.setInterval(TICK_MS)
@@ -162,7 +169,7 @@ class OrbitExplorer(QWidget):
             ring = self.current
             if ring is None:
                 break
-            entry = next((e for e in ring.entries if e.name == part), None)
+            entry = next((e for e in ring.entries if e.name == part and not e.is_parent), None)
             if entry is None:
                 break
             if entry.is_dir and (i < len(parts) - 1 or target.is_dir()):
@@ -196,12 +203,17 @@ class OrbitExplorer(QWidget):
             entries.append(Entry(name, full, os.path.isdir(full)))
         entries.sort(key=lambda e: (not e.is_dir, e.name.lower()))
         hidden = max(0, len(entries) - MAX_ENTRIES)
-        return entries[:MAX_ENTRIES], hidden
+        entries = entries[:MAX_ENTRIES]
+        parent = os.path.dirname(path.rstrip("/\\")) or path
+        if parent != path:
+            entries.insert(0, Entry(PARENT_NAME, parent, True, is_parent=True))
+        return entries, hidden
 
     def _push_ring(self, path: str) -> Ring:
         entries, hidden = self._read_dir(path)
         ring = Ring(path=path, entries=entries, hidden_count=hidden)
-        ring.rotation = math.pi / 2  # first entry at the front
+        first = 1 if ring.entries and ring.entries[0].is_parent and len(ring.entries) > 1 else 0
+        ring.rotation = math.pi / 2 - first * ring.step  # first real entry at the front
         ring.center = QPointF(self.width() / 2, self.height() * MAIN_ROW_Y)
         self.rings.append(ring)
         self.directory_changed.emit(path)
@@ -209,6 +221,9 @@ class OrbitExplorer(QWidget):
 
     def expand(self, entry: Entry) -> None:
         if not entry.is_dir:
+            return
+        if entry.is_parent:
+            self.go_up()
             return
         self._push_ring(entry.path)
         self._layout_rings(animate=True)
@@ -227,9 +242,22 @@ class OrbitExplorer(QWidget):
         self._start()
 
     def go_up(self) -> None:
+        """Back to the parent ring; at the root, re-root to the parent directory."""
         live = [r for r in self.rings if not r.dying]
         if len(live) > 1:
             self.collapse_to(len(live) - 2)
+            return
+        old_root = self._root
+        parent = os.path.dirname(old_root.rstrip("/\\")) or old_root
+        if parent == old_root:
+            return
+        self.set_root(parent)
+        ring = self.current
+        if ring is not None:
+            index = next((i for i, e in enumerate(ring.entries) if e.path == old_root), None)
+            if index is not None:
+                self.bring_to_front(ring, index, animate=False)
+        self.update()
 
     def _layout_rings(self, animate: bool) -> None:
         live = [r for r in self.rings if not r.dying]
@@ -409,9 +437,25 @@ class OrbitExplorer(QWidget):
         self._start()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        steps = event.angleDelta().y() / 120
-        if steps:
-            self.step(-1 if steps > 0 else 1)
+        """Mouse wheel (either axis) and touchpad scroll gestures both roll the ring.
+
+        A horizontal two-finger swipe arrives as a wheel event with an x delta; touchpads
+        also report pixel deltas, which are accumulated so small gestures still add up.
+        """
+        pixels = event.pixelDelta()
+        angle = event.angleDelta()
+        if not pixels.isNull():
+            travel = pixels.x() if abs(pixels.x()) >= abs(pixels.y()) else -pixels.y()
+            self._wheel_accum += travel / PIXEL_STEP
+        else:
+            travel = angle.x() if abs(angle.x()) >= abs(angle.y()) else -angle.y()
+            self._wheel_accum += travel / 8.0 / WHEEL_STEP_DEGREES
+        while self._wheel_accum >= 1.0:
+            self._wheel_accum -= 1.0
+            self.step(1)
+        while self._wheel_accum <= -1.0:
+            self._wheel_accum += 1.0
+            self.step(-1)
         event.accept()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
@@ -462,7 +506,9 @@ class OrbitExplorer(QWidget):
         hit = self.item_at(pos)
         menu = QMenu(self)
         current = self.current_path()
-        if hit is not None:
+        if hit is not None and hit[1].entry.is_parent:
+            menu.addAction("Go to parent folder", self.go_up)
+        elif hit is not None:
             entry = hit[1].entry
             directory = entry.path if entry.is_dir else os.path.dirname(entry.path)
             menu.addAction("Use as working directory", lambda: self.cwd_requested.emit(directory))
@@ -583,7 +629,24 @@ class OrbitExplorer(QWidget):
         x, y = item.pos.x(), item.pos.y()
         dim = 0.35 + 0.65 * item.depth
         painter.setOpacity(ring.alpha * dim)
-        if item.entry.is_dir:
+        if item.entry.is_parent:
+            color = QColor(t.accent_hover if is_front else t.text_muted)
+            painter.setPen(QPen(color, 2.0))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(
+                QRectF(x - size / 2, y - size * 0.32, size, size * 0.72), size * 0.1, size * 0.1
+            )
+            arrow = QPainterPath()
+            arrow.moveTo(x, y - size * 0.22)
+            arrow.lineTo(x - size * 0.22, y + size * 0.05)
+            arrow.lineTo(x - size * 0.08, y + size * 0.05)
+            arrow.lineTo(x - size * 0.08, y + size * 0.3)
+            arrow.lineTo(x + size * 0.08, y + size * 0.3)
+            arrow.lineTo(x + size * 0.08, y + size * 0.05)
+            arrow.lineTo(x + size * 0.22, y + size * 0.05)
+            arrow.closeSubpath()
+            painter.fillPath(arrow, color)
+        elif item.entry.is_dir:
             color = QColor(t.accent_hover if is_front else t.accent)
             path = QPainterPath()
             path.addRoundedRect(

@@ -37,16 +37,17 @@ def names(ring):
     return [e.name for e in ring.entries]
 
 
-def test_root_ring_lists_dirs_first_and_hides_dotfiles(explorer):
+def test_root_ring_lists_parent_then_dirs_then_files_and_hides_dotfiles(explorer):
     ring = explorer.current
-    assert names(ring) == ["docs", "src", "README.md"]
+    assert names(ring) == ["..", "docs", "src", "README.md"]
+    assert ring.entries[0].is_parent
     explorer.set_show_hidden(True)
     assert ".hidden" in names(explorer.current)
 
 
 def test_front_item_and_rolling(explorer):
     ring = explorer.current
-    assert ring.front_index() == 0  # the first entry starts at the front
+    assert ring.front_index() == 1  # the first real entry (after "..") starts at the front
     geometry = explorer.item_geometry(ring)
     front = max(geometry, key=lambda g: g.depth)
     back = min(geometry, key=lambda g: g.depth)
@@ -54,9 +55,9 @@ def test_front_item_and_rolling(explorer):
     assert front.pos.y() > back.pos.y()  # the front is at the bottom of the flat ellipse
     explorer.step(1)
     explorer.settle()
-    assert ring.front_index() == 1
-    explorer.roll(-2 * math.pi / 3)
     assert ring.front_index() == 2
+    explorer.roll(-2 * math.pi / 4)
+    assert ring.front_index() == 3
 
 
 def test_hover_rolls_the_ring(explorer, qtbot):
@@ -84,7 +85,7 @@ def test_expand_and_collapse(explorer, tree):
     explorer.expand(src)
     explorer.settle()
     assert explorer.current.path == str(tree / "src")
-    assert names(explorer.current) == ["main.py", "util.py"]
+    assert names(explorer.current) == ["..", "main.py", "util.py"]
     # The parent ring shrank and moved to the top row; the new one is full size in the middle.
     assert root.scale < 0.5 and root.center.y() < explorer.current.center.y()
     assert explorer.current.scale == 1.0
@@ -161,7 +162,8 @@ def test_large_directory_is_capped(qtbot, tmp_path):
         (tmp_path / f"f{i:04d}.txt").write_text("x")
     widget = OrbitExplorer(str(tmp_path), Config().ui.theme)
     qtbot.addWidget(widget)
-    assert len(widget.current.entries) == MAX_ENTRIES and widget.current.hidden_count == 25
+    # The cap counts real entries; ".." rides on top of it.
+    assert len(widget.current.entries) == MAX_ENTRIES + 1 and widget.current.hidden_count == 25
 
 
 def test_item_at_prefers_front(explorer):
@@ -177,3 +179,50 @@ def test_paints_offscreen(explorer, tree):
     explorer.settle()
     image = explorer.grab().toImage()
     assert not image.isNull() and image.width() == 400
+
+
+def test_parent_entry_goes_up_and_reroots_at_the_root(explorer, tree):
+    root = explorer.current
+    explorer.expand(next(e for e in root.entries if e.name == "src"))
+    explorer.settle()
+    parent = explorer.current.entries[0]
+    assert parent.is_parent and parent.path == str(tree)
+    explorer.expand(parent)  # ".." inside src collapses back to the root ring
+    explorer.settle()
+    assert explorer.current is root and len(explorer.rings) == 1
+    explorer.expand(root.entries[0])  # ".." at the root re-roots one level up ...
+    explorer.settle()
+    assert explorer.root == str(tree.parent)
+    ring = explorer.current
+    front = ring.entries[ring.front_index()]
+    assert front.path == str(tree)  # ... with the old root at the front
+
+
+def test_wheel_axes_and_touchpad_pixels(explorer):
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+
+    def wheel(angle: QPoint, pixels: QPoint = QPoint()):
+        return QWheelEvent(
+            QPointF(100, 100),
+            QPointF(100, 100),
+            pixels,
+            angle,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+            Qt.ScrollPhase.NoScrollPhase,
+            False,
+        )
+
+    ring = explorer.current
+    start = ring.front_index()
+    explorer.wheelEvent(wheel(QPoint(0, -120)))  # vertical notch: one step forward
+    explorer.settle()
+    assert ring.front_index() == (start + 1) % len(ring.entries)
+    explorer.wheelEvent(wheel(QPoint(-120, 0)))  # horizontal (two-finger) swipe: one step back
+    explorer.settle()
+    assert ring.front_index() == start
+    for _ in range(4):  # small touchpad pixel deltas accumulate into a step
+        explorer.wheelEvent(wheel(QPoint(0, 0), QPoint(12, 0)))
+    explorer.settle()
+    assert ring.front_index() == (start + 1) % len(ring.entries)

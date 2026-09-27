@@ -152,6 +152,16 @@ class SessionStore:
             self._conn.execute("DELETE FROM skill_events WHERE session_id=?", (session_id,))
             self._conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
 
+    def delete_all(self) -> int:
+        """Factory reset: remove every session and message. Returns how many sessions went."""
+        with self._lock:
+            count = self._conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+            self._conn.execute("DELETE FROM messages")
+            self._conn.execute("DELETE FROM skill_events")
+            self._conn.execute("DELETE FROM sessions")
+            self._conn.execute("VACUUM")
+        return count
+
     def save_tasks(self, session_id: str, tasks_json: str) -> None:
         with self._lock:
             self._conn.execute("UPDATE sessions SET tasks=? WHERE id=?", (tasks_json, session_id))

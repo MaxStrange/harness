@@ -66,6 +66,18 @@ pytest tests/stack -v -s     # the full stack tests: streaming, tool calling, co
                              # summarizer, web reader injection resistance, SearXNG JSON API
 ```
 
+## Resetting
+
+Sessions live in `~/.harness/sessions.sqlite3`. To wipe the chat history and start fresh, use
+File > Delete all sessions in the app, or from a shell:
+
+```bash
+harness --reset-sessions     # asks for confirmation; config, logs and skills are untouched
+```
+
+Deleting the whole `~/.harness/` folder is the full factory reset (the next launch rewrites the
+default config; keep a copy of `config.yml` and `secrets/` if you want them back).
+
 ## Tests
 
 ```bash

@@ -310,6 +310,7 @@ class PanelsConfig(StrictModel):
     explorer_height: int = Field(default=400, gt=0)
     window_width: int = Field(default=1500, gt=0)
     window_height: int = Field(default=950, gt=0)
+    start_maximized: bool = True
 
 
 class UiConfig(StrictModel):
@@ -344,8 +345,16 @@ class Config(StrictModel):
 
 
 def default_config_text() -> str:
-    """The commented default config shipped with the package."""
-    return importlib.resources.files("harness").joinpath("default_config.yml").read_text("utf-8")
+    """The commented default config shipped with the package.
+
+    The file is written for ``~/.harness``; when HARNESS_HOME points elsewhere the
+    paths in it follow, so the text always matches the schema defaults.
+    """
+    text = importlib.resources.files("harness").joinpath("default_config.yml").read_text("utf-8")
+    home = default_home()
+    if home != Path.home() / ".harness":
+        text = text.replace("~/.harness", str(home))
+    return text
 
 
 def parse_config(text: str, source: str = "<config>") -> Config:

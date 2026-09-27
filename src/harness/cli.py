@@ -29,6 +29,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="check that the configured model servers and SearXNG are reachable, then exit",
     )
+    parser.add_argument(
+        "--reset-sessions",
+        action="store_true",
+        help="delete ALL saved sessions and chat history (asks for confirmation), then exit",
+    )
     parser.add_argument("--version", action="version", version=f"harness {__version__}")
     args = parser.parse_args(argv)
 
@@ -55,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.stack_check:
         return stack_check(args.config)
+    if args.reset_sessions:
+        return reset_sessions(args.config)
     from harness.ui.app import run
 
     return run(args.config)
@@ -93,3 +100,27 @@ def stack_check(config_path: Path | None) -> int:
     except SearchError as exc:
         print(f"searxng: OFFLINE - {exc}")
     return 1 if failures else 0
+
+
+def reset_sessions(config_path: Path | None) -> int:
+    """Factory reset of the session history: the database is emptied, the config and logs stay."""
+    from harness.agent.store import SessionStore
+
+    try:
+        config = load_config(HarnessPaths(), config_path)
+    except ConfigError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    db_path = Path(config.sessions.db_path)
+    if not db_path.exists():
+        print(f"no session database at {db_path}; nothing to reset")
+        return 0
+    answer = input(f"Delete ALL sessions and chat history in {db_path}? Type 'yes' to confirm: ")
+    if answer.strip().lower() != "yes":
+        print("cancelled")
+        return 1
+    store = SessionStore(db_path)
+    count = store.delete_all()
+    store.close()
+    print(f"deleted {count} session(s)")
+    return 0

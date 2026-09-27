@@ -207,6 +207,8 @@ class MainWindow(QMainWindow):
             )
         )
         file_menu.addSeparator()
+        file_menu.addAction(self._action("Delete all sessions...", self.reset_sessions))
+        file_menu.addSeparator()
         file_menu.addAction(self._action("Quit", self.close, "Ctrl+Q"))
         session_menu = self.menuBar().addMenu("&Session")
         session_menu.addAction(self._action("Change working directory...", self.choose_cwd))
@@ -317,6 +319,24 @@ class MainWindow(QMainWindow):
             self.new_session()
         else:
             self.sessions.refresh()
+
+    def reset_sessions(self) -> None:
+        """Factory reset of the chat history (the config, logs and skills stay)."""
+        if self.controller.busy:
+            self._on_status("Stop the current turn before deleting sessions.", True)
+            return
+        answer = QMessageBox.warning(
+            self,
+            "Delete all sessions",
+            "Delete every saved session and its chat history? This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        count = self.core.store.delete_all()
+        self.new_session()
+        self.chat.add_notice(f"Deleted {count} session(s).")
 
     def rename_session(self) -> None:
         if self.agent.session is None:

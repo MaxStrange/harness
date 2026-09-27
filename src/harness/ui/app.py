@@ -52,7 +52,10 @@ def run(config_path: Path | None = None) -> int:
         window.open_session(sessions[0].id)
     else:
         window.new_session()
-    window.show()
+    if config.ui.panels.start_maximized:
+        window.showMaximized()
+    else:
+        window.show()
     code = app.exec()
     log.info("harness exiting")
     core.shutdown()

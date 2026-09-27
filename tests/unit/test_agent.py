@@ -60,6 +60,8 @@ def test_store_sessions_messages_search(tmp_path):
     assert store.message_count(a.id) == 2
     store.delete_session(a.id)
     assert store.get_session(a.id) is None and store.search("lizard") == []
+    assert store.delete_all() == 1
+    assert store.list_sessions() == [] and store.search("pandas") == []
     store.close()
 
 
