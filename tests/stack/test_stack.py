@@ -60,8 +60,14 @@ def test_main_model_context_window_matches_config(stack_config):
     """llama.cpp reports its context size on /props; the config must not assume more."""
     endpoint = stack_config.models.main.endpoints[0]
     base = endpoint.base_url.removesuffix("/v1")
+    api_key = endpoint.resolve_api_key()
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    # A llama.cpp router only reports n_ctx for a named model; a single server ignores the param.
+    params = {"model": endpoint.model}
     try:
-        response = httpx.get(f"{base}/props", timeout=10, trust_env=False)
+        response = httpx.get(
+            f"{base}/props", params=params, headers=headers, timeout=10, trust_env=False
+        )
     except httpx.HTTPError as exc:
         pytest.skip(f"/props not reachable ({exc}); not a llama.cpp server?")
     if response.status_code != 200:

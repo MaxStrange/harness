@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Harness secrets (API keys live in ~/.harness/secrets, never in the repo)
+secrets/
+*api-key*
+*.key

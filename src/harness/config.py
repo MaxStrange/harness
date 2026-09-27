@@ -12,7 +12,14 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from harness.paths import HarnessPaths, default_home
 
@@ -40,10 +47,19 @@ def _in_home(*parts: str) -> str:
     return str(default_home().joinpath(*parts))
 
 
+LLM_ROUTER_URL = "http://10.0.0.228:18080/v1"
+
+
+def _default_api_key_file() -> str:
+    return _in_home("secrets", "llama-api-key")
+
+
 class Endpoint(StrictModel):
     base_url: str = Field(description="OpenAI-compatible base URL, ending in /v1")
     model: str = "default"
     api_key: str | None = None
+    # A file holding the key (first line), so the config itself carries no secret.
+    api_key_file: str | None = None
     timeout_s: float = Field(default=120, gt=0)
 
     @field_validator("base_url")
@@ -53,15 +69,52 @@ class Endpoint(StrictModel):
             raise ValueError("must start with http:// or https://")
         return value.rstrip("/")
 
+    @field_validator("api_key_file")
+    @classmethod
+    def _expand_key_file(cls, value: str | None) -> str | None:
+        return _expand(value)
+
+    @model_validator(mode="after")
+    def _one_key_source(self) -> Endpoint:
+        if self.api_key and self.api_key_file:
+            raise ValueError("set api_key or api_key_file, not both")
+        return self
+
+    def resolve_api_key(self) -> str | None:
+        """The key to send, read from ``api_key_file`` if set. Raises ConfigError if unreadable."""
+        if self.api_key_file is None:
+            return self.api_key
+        try:
+            lines = Path(self.api_key_file).read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            raise ConfigError(
+                f"api_key_file {self.api_key_file} cannot be read: {exc.strerror or exc}"
+            ) from exc
+        key = lines[0].strip() if lines else ""
+        if not key:
+            raise ConfigError(f"api_key_file {self.api_key_file} is empty")
+        return key
+
+
+def _router_endpoint(model: str, timeout_s: float = 120) -> Endpoint:
+    return Endpoint(
+        base_url=LLM_ROUTER_URL,
+        model=model,
+        api_key_file=_default_api_key_file(),
+        timeout_s=timeout_s,
+    )
+
 
 class MainModelConfig(StrictModel):
     endpoints: list[Endpoint] = Field(
-        default_factory=lambda: [Endpoint(base_url="http://10.0.0.228:8080/v1")],
+        default_factory=lambda: [_router_endpoint("gpt-oss-120b")],
         min_length=1,
     )
     temperature: float = Field(default=0.2, ge=0)
     max_tokens: int = Field(default=4096, gt=0)
-    context_window: int = Field(default=32768, gt=0)
+    # Below the server's 131072: the compaction estimate (~4 chars/token, no tool schemas)
+    # undercounts code and JSON, so the real prompt can run well past it.
+    context_window: int = Field(default=98304, gt=0)
     tool_format: Literal["native", "text"] = "native"
     compaction_threshold: float = Field(default=0.8, gt=0, le=1)
     compaction_keep_last: int = Field(default=6, ge=1)
@@ -71,10 +124,7 @@ class MainModelConfig(StrictModel):
 class SummarizerConfig(StrictModel):
     enabled: bool = True
     endpoints: list[Endpoint] = Field(
-        default_factory=lambda: [
-            Endpoint(base_url="http://127.0.0.1:8081/v1", timeout_s=20),
-            Endpoint(base_url="http://10.0.0.228:8082/v1", timeout_s=20),
-        ]
+        default_factory=lambda: [_router_endpoint("qwen3-coder-30b", timeout_s=20)]
     )
     temperature: float = Field(default=0.0, ge=0)
     max_tokens: int = Field(default=256, gt=0)
@@ -82,9 +132,7 @@ class SummarizerConfig(StrictModel):
 
 class WebReaderConfig(StrictModel):
     enabled: bool = True
-    endpoints: list[Endpoint] = Field(
-        default_factory=lambda: [Endpoint(base_url="http://10.0.0.228:8083/v1")]
-    )
+    endpoints: list[Endpoint] = Field(default_factory=lambda: [_router_endpoint("qwen3-coder-30b")])
     temperature: float = Field(default=0.0, ge=0)
     max_tokens: int = Field(default=2048, gt=0)
     max_input_chars: int = Field(default=60000, gt=0)
@@ -135,6 +183,7 @@ class SecurityConfig(StrictModel):
             "~/.config/gh",
             _in_home("config.yml"),
             _in_home("sessions.sqlite3"),
+            _in_home("secrets"),
         ]
     )
     deny_names: list[str] = Field(

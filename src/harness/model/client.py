@@ -14,7 +14,7 @@ from typing import Any, Protocol
 
 import httpx
 
-from harness.config import Endpoint
+from harness.config import ConfigError, Endpoint
 from harness.logging_setup import prompts_log
 from harness.model import text_tools
 from harness.model.types import (
@@ -80,8 +80,15 @@ class OpenAICompatClient:
         self.max_tokens = max_tokens
         self.name = f"{endpoint.model}@{endpoint.base_url}"
         headers = {"Content-Type": "application/json"}
-        if endpoint.api_key:
-            headers["Authorization"] = f"Bearer {endpoint.api_key}"
+        # A missing key file makes this endpoint report offline with the reason, not HTTP 401.
+        self.key_error: str | None = None
+        try:
+            api_key = endpoint.resolve_api_key()
+        except ConfigError as exc:
+            api_key, self.key_error = None, str(exc)
+            log.warning("%s: %s", self.name, exc)
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         self._client = httpx.Client(
             base_url=endpoint.base_url,
             headers=headers,
@@ -124,6 +131,8 @@ class OpenAICompatClient:
         return body
 
     def health(self) -> str | None:
+        if self.key_error:
+            return f"{self.endpoint.base_url}: {self.key_error}"
         try:
             response = self._client.get("/models", timeout=5.0)
         except httpx.HTTPError as exc:
@@ -161,6 +170,9 @@ class OpenAICompatClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> Iterator[StreamEvent]:
+        if self.key_error:
+            yield StreamError(f"{self.name}: {self.key_error}")
+            return
         body = self._body(messages, tools, True, temperature, max_tokens)
         plog = prompts_log()
         plog.info("REQUEST %s\n%s", self.name, json.dumps(body, indent=1, ensure_ascii=False))

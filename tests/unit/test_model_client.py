@@ -269,3 +269,35 @@ def test_needs_compaction_threshold():
     msgs = [Message("user", "x" * 4000)]
     assert needs_compaction(msgs, context_window=1000, threshold=0.8)
     assert not needs_compaction(msgs, context_window=10000, threshold=0.8)
+
+
+def test_missing_api_key_file_reports_offline_with_reason(tmp_path):
+    from harness.config import Endpoint
+    from harness.model.client import OpenAICompatClient
+    from harness.model.types import Message, StreamError
+
+    endpoint = Endpoint(base_url="http://model.test/v1", api_key_file=str(tmp_path / "missing"))
+    client = OpenAICompatClient(endpoint)
+    assert "cannot be read" in client.health()
+    events = list(client.stream_chat([Message("user", "hi")]))
+    assert len(events) == 1 and isinstance(events[0], StreamError)
+    assert "api_key_file" in events[0].error
+
+
+def test_api_key_file_sends_bearer_header(tmp_path):
+    import httpx
+
+    from harness.config import Endpoint
+    from harness.model.client import OpenAICompatClient
+
+    (tmp_path / "key").write_text("sk-file\n", encoding="utf-8")
+    seen = {}
+
+    def handler(request):
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"data": []})
+
+    endpoint = Endpoint(base_url="http://model.test/v1", api_key_file=str(tmp_path / "key"))
+    client = OpenAICompatClient(endpoint, transport=httpx.MockTransport(handler))
+    assert client.health() is None
+    assert seen["auth"] == "Bearer sk-file"

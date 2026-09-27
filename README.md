@@ -40,17 +40,22 @@ First launch writes a commented default config to `~/.harness/config.yml` and cr
 
 ## Model servers
 
-The main model is served by llama.cpp's server with tool calling enabled, for example:
+The defaults point every role at a llama.cpp router on the LLM machine (`10.0.0.228:18080`), which
+loads models on demand from a presets file, at most two at once: `gpt-oss-120b` for the main model
+and `qwen3-coder-30b` for both the summarizer and the web reader. Any OpenAI-compatible llama.cpp
+server works too, one per role if you like:
 
 ```bash
-llama-server -m main-model.gguf --host 0.0.0.0 --port 8080 --jinja -c 32768
-llama-server -m small-model.gguf --host 0.0.0.0 --port 8082      # summarizer
-llama-server -m reader-model.gguf --host 0.0.0.0 --port 8083                 # web reader
+llama-server -m main-model.gguf --host 0.0.0.0 --port 8080 --jinja -c 32768 --api-key-file key
 ```
 
 Point `models.main`, `models.summarizer` and `models.web_reader` in the config at them. Each role
 takes a list of endpoints tried in order, so the summarizer can run on this machine first and fall
 back to the LLM machine (M2), and one server can fill several roles while you experiment (M5).
+
+The server's API key goes in its own file, not in the config: put it on the first line of
+`~/.harness/secrets/llama-api-key` (the default `api_key_file` of every endpoint). The model skills
+may not read `~/.harness/secrets`, and `harness --check-config` reports a missing or empty key file.
 
 ## Checking the stack
 

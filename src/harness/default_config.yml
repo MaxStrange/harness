@@ -6,17 +6,26 @@
 # that names the setting.
 
 models:
-  # The main agent model. Served by llama.cpp's server (launch it with tool
-  # calling enabled, e.g. `llama-server --jinja ...`), OpenAI-compatible API.
+  # All three roles are served by the llama.cpp router on the LLM machine, which
+  # loads models on demand (at most two at once) and requires an API key. The key
+  # lives in its own file, never in this config: copy the router's key file to
+  # ~/.harness/secrets/llama-api-key (first line = the key).
+
+  # The main agent model. llama.cpp server with tool calling enabled
+  # (`--jinja`), OpenAI-compatible API.
   main:
     endpoints:
-      - base_url: http://10.0.0.228:8080/v1
-        model: default          # the model name the server reports / expects
-        api_key: null           # llama.cpp ignores this; set for servers that check it
+      - base_url: http://10.0.0.228:18080/v1
+        model: gpt-oss-120b     # the model name the server reports / expects
+        api_key: null           # the key inline; prefer api_key_file (set one, not both)
+        api_key_file: ~/.harness/secrets/llama-api-key
         timeout_s: 120
     temperature: 0.2
     max_tokens: 4096
-    context_window: 32768       # tokens; used to decide when to compact
+    # Tokens; used to decide when to compact. Keep it below the server's context
+    # (131072 here): the estimate (~4 chars/token, tool schemas not counted)
+    # undercounts code and JSON, so the real prompt can run well past it.
+    context_window: 98304
     tool_format: native         # native = OpenAI function calling; text = parse ```tool_call blocks
     # Keep this many tokens (estimate) free before compaction kicks in.
     compaction_threshold: 0.8
@@ -24,29 +33,31 @@ models:
     auto_compact: true
 
   # Small model that turns model-written shell commands into plain language for
-  # the approval dialog. Endpoints are tried in order: put the harness machine
-  # first and the LLM machine second. If none answers, approval still works and
-  # the harness shows "Summarizer model offline: <reason>" instead.
+  # the approval dialog. Endpoints are tried in order, so a model on this machine
+  # can go first with the LLM machine as fallback. If none answers, approval still
+  # works and the harness shows "Summarizer model offline: <reason>" instead.
   summarizer:
     enabled: true
     endpoints:
-      - base_url: http://127.0.0.1:8081/v1
-        model: default
-        timeout_s: 20
-      - base_url: http://10.0.0.228:8082/v1
-        model: default
+      - base_url: http://10.0.0.228:18080/v1
+        model: qwen3-coder-30b
+        api_key: null
+        api_key_file: ~/.harness/secrets/llama-api-key
         timeout_s: 20
     temperature: 0.0
     max_tokens: 256
 
   # The model that reads untrusted web content (and files in untrusted
   # locations) so the main model never sees raw web text. Should be a different
-  # model from the main model.
+  # model from the main model. Sharing the summarizer's model keeps the router
+  # at two resident models.
   web_reader:
     enabled: true
     endpoints:
-      - base_url: http://10.0.0.228:8083/v1
-        model: default
+      - base_url: http://10.0.0.228:18080/v1
+        model: qwen3-coder-30b
+        api_key: null
+        api_key_file: ~/.harness/secrets/llama-api-key
         timeout_s: 120
     temperature: 0.0
     max_tokens: 2048
@@ -84,6 +95,7 @@ security:
     - ~/.config/gh
     - ~/.harness/config.yml
     - ~/.harness/sessions.sqlite3
+    - ~/.harness/secrets
   # File names that are denied wherever they appear.
   deny_names:
     - .env

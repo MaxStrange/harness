@@ -59,3 +59,35 @@ def test_skill_timeout_lookup():
     cfg = Config()
     assert cfg.skills.timeout_for("terminal") == 300
     assert cfg.skills.timeout_for("nonexistent") == cfg.skills.default_timeout_s
+
+
+def test_api_key_file_is_read_and_expanded(tmp_path):
+    from harness.config import Endpoint
+
+    key_file = tmp_path / "key"
+    key_file.write_text("sk-test-123\n", encoding="utf-8")
+    endpoint = Endpoint(base_url="http://x/v1", api_key_file=str(key_file))
+    assert endpoint.resolve_api_key() == "sk-test-123"
+    assert Endpoint(base_url="http://x/v1", api_key="inline").resolve_api_key() == "inline"
+    assert Endpoint(base_url="http://x/v1").resolve_api_key() is None
+
+
+def test_api_key_file_problems_are_reported(tmp_path):
+    from harness.config import Endpoint
+
+    missing = Endpoint(base_url="http://x/v1", api_key_file=str(tmp_path / "nope"))
+    with pytest.raises(ConfigError, match="cannot be read"):
+        missing.resolve_api_key()
+    (tmp_path / "empty").write_text("\n", encoding="utf-8")
+    empty = Endpoint(base_url="http://x/v1", api_key_file=str(tmp_path / "empty"))
+    with pytest.raises(ConfigError, match="is empty"):
+        empty.resolve_api_key()
+
+
+def test_api_key_and_api_key_file_are_exclusive():
+    text = (
+        "models:\n  main:\n    endpoints:\n"
+        "      - base_url: http://x/v1\n        api_key: a\n        api_key_file: /k\n"
+    )
+    with pytest.raises(ConfigError, match="not both"):
+        parse_config(text, "cfg")

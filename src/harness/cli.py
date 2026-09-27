@@ -37,9 +37,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.check_config:
         try:
-            load_config(HarnessPaths(), args.config)
+            config = load_config(HarnessPaths(), args.config)
         except ConfigError as exc:
             print(exc, file=sys.stderr)
+            return 2
+        key_errors = []
+        for role in ("main", "summarizer", "web_reader"):
+            for i, endpoint in enumerate(getattr(config.models, role).endpoints):
+                try:
+                    endpoint.resolve_api_key()
+                except ConfigError as exc:
+                    key_errors.append(f"models.{role}.endpoints.{i}: {exc}")
+        if key_errors:
+            print("\n".join(key_errors), file=sys.stderr)
             return 2
         print(f"config OK: {args.config or HarnessPaths().config_file}")
         return 0
