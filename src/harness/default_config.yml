@@ -192,3 +192,4 @@ ui:
   file_explorer_root: "~"         # initial root; the explorer follows the session working directory
   file_explorer: orbit             # orbit = the orbiting explorer (UI3); tree = a plain tree view
   file_explorer_show_hidden: false
+  critter: lizard                  # the sprite that animates while the model works: lizard, turtle, sloth, dinosaur, songbird

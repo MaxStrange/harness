@@ -31,6 +31,7 @@ from harness.terminal.session import TerminalSession
 from harness.ui.bridge import AgentController, QtUiBridge
 from harness.ui.chat.chat_view import ChatView
 from harness.ui.chat.composer import Composer
+from harness.ui.critter import StatusStrip
 from harness.ui.dock import Dock
 from harness.ui.file_explorer import FileExplorer
 from harness.ui.handoff import HandoffExecutor
@@ -119,6 +120,8 @@ class MainWindow(QMainWindow):
         chat_layout = QVBoxLayout(chat_column)
         chat_layout.setContentsMargins(0, 0, 0, 0)
         chat_layout.addWidget(self.chat, 1)
+        self.status_strip = StatusStrip(self.theme, ui.critter)
+        chat_layout.addWidget(self.status_strip)
         chat_layout.addWidget(self.composer)
 
         explorer_root = str(Path(ui.file_explorer_root).expanduser())
@@ -246,7 +249,7 @@ class MainWindow(QMainWindow):
         s.turn_started.connect(self._on_turn_started)
         s.text_delta.connect(self.chat.on_text_delta)
         s.assistant_message.connect(self.chat.on_assistant_message)
-        s.skill_started.connect(self.chat.on_skill_started)
+        s.skill_started.connect(self._on_skill_started)
         s.approval_needed.connect(self._on_approval_needed)
         s.skill_finished.connect(self._on_skill_finished)
         s.handoff_requested.connect(self.perform_handoff)
@@ -384,16 +387,20 @@ class MainWindow(QMainWindow):
     def _on_turn_started(self) -> None:
         self.composer.set_busy(True)
         self.turn_status.setText("Thinking...")
+        self.status_strip.set_busy(True)
+        self.status_strip.set_status("Thinking...")
         self.chat.on_turn_started()
 
     def _on_turn_finished(self, cancelled: bool) -> None:
         self.composer.set_busy(False)
         self.turn_status.setText("")
+        self.status_strip.set_busy(False)
         self.chat.on_turn_finished(cancelled)
         self.sessions.refresh()
 
     def _on_status(self, text: str, error: bool) -> None:
         self.turn_status.setText(text)
+        self.status_strip.set_status(text, error)
         self.turn_status.setObjectName("statusError" if error else "status")
         self.turn_status.style().unpolish(self.turn_status)
         self.turn_status.style().polish(self.turn_status)
@@ -404,15 +411,21 @@ class MainWindow(QMainWindow):
     def _on_approval_needed(self, pending) -> None:
         self.chat.on_approval_needed(pending)
         self.turn_status.setText("Waiting for your approval")
+        self.status_strip.set_status("Waiting for your approval")
         if not self.isActiveWindow():
             self.show_notification("Approval needed", pending.request.title)
 
     def _resolve_approval(self, approval_id: str, decision: ApprovalDecision) -> bool:
         return self.core.broker.resolve(approval_id, decision)
 
+    def _on_skill_started(self, call_id: str, skill: str, args: dict) -> None:
+        self.chat.on_skill_started(call_id, skill, args)
+        self.status_strip.set_status(f"Running {skill}...")
+
     def _on_skill_finished(self, outcome: SkillOutcome) -> None:
         self.chat.on_skill_finished(outcome)
         self.turn_status.setText("Thinking...")
+        self.status_strip.set_status("Thinking...")
 
     # -- handoffs and views -------------------------------------------------------
 

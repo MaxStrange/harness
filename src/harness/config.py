@@ -322,6 +322,7 @@ class UiConfig(StrictModel):
     file_explorer_root: str = "~"
     file_explorer: Literal["orbit", "tree"] = "orbit"
     file_explorer_show_hidden: bool = False
+    critter: Literal["lizard", "turtle", "sloth", "dinosaur", "songbird"] = "lizard"
 
     @field_validator("file_explorer_root")
     @classmethod
