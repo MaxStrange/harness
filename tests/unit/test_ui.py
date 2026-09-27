@@ -78,9 +78,9 @@ def test_window_streams_reply_and_lists_session(qtbot, window):
     win.composer.input.setPlainText("hi")
     win.composer._submit()
     wait_turn(qtbot, win)
-    from PySide6.QtWidgets import QLabel
+    from harness.ui.chat.message_widget import AssistantBubble
 
-    texts = " ".join(label.text() for label in win.chat._container.findChildren(QLabel))
+    texts = " ".join(b.text for b in win.chat._container.findChildren(AssistantBubble))
     assert "there" in texts
     assert not win.controller.busy
     assert core.store.get_session(win.agent.session.id).title == "hi"

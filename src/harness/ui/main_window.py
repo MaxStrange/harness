@@ -112,7 +112,7 @@ class MainWindow(QMainWindow):
         self.side_panel.setVisible(False)
 
         self.chat = ChatView(ui, self.perform_handoff, self._resolve_approval)
-        self.composer = Composer()
+        self.composer = Composer(self._session_cwd)
         self.composer.send_requested.connect(self.send_message)
         self.composer.stop_requested.connect(self.controller.stop)
         chat_column = QWidget()

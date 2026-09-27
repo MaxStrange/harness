@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QLabel, QListWidget, QListWidgetItem, QVBoxLayout,
 
 from harness.skills.tasklist_store import TaskList, TaskListStore
 
-MARKS = {"todo": "☐", "doing": "◐", "done": "☑"}
+PREFIX = {"todo": "", "doing": "(in progress) ", "done": ""}
 
 
 class TaskListView(QWidget):
@@ -39,7 +39,7 @@ class TaskListView(QWidget):
         self.list.blockSignals(True)
         self.list.clear()
         for task in tasks.tasks:
-            item = QListWidgetItem(f"{MARKS[task.status]}  {task.text}")
+            item = QListWidgetItem(f"{PREFIX[task.status]}{task.text}")
             item.setData(Qt.ItemDataRole.UserRole, task.id)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(

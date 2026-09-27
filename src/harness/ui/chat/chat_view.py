@@ -52,6 +52,13 @@ class ChatView(QScrollArea):
 
     def _add(self, widget: QWidget) -> None:
         self._layout.insertWidget(self._layout.count() - 1, widget)
+        if self._stick_to_bottom:
+            QTimer.singleShot(0, self.scroll_to_bottom)
+
+    def scroll_to_bottom(self) -> None:
+        bar = self.verticalScrollBar()
+        bar.setValue(bar.maximum())
+        self._stick_to_bottom = True
 
     def _on_range_changed(self, _min: int, maximum: int) -> None:
         if self._stick_to_bottom:

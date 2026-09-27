@@ -202,7 +202,8 @@ def test_wheel_axes_and_touchpad_pixels(explorer):
     from PySide6.QtCore import QPoint, QPointF, Qt
     from PySide6.QtGui import QWheelEvent
 
-    def wheel(angle: QPoint, pixels: QPoint = QPoint()):
+    def wheel(angle: QPoint, pixels: QPoint | None = None):
+        pixels = pixels or QPoint()
         return QWheelEvent(
             QPointF(100, 100),
             QPointF(100, 100),

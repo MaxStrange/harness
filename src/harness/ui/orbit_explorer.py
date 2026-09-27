@@ -265,7 +265,7 @@ class OrbitExplorer(QWidget):
         parents = live[:-1]
         shown = parents[-3:]  # the row holds the last three parents
         slot_w = w / (len(shown) + 1) if shown else w
-        for i, ring in enumerate(parents):
+        for ring in parents:
             ring.target_scale = STACK_SCALE if ring in shown else 0.0
             ring.target_alpha = 1.0 if ring in shown else 0.0
             if ring in shown:
