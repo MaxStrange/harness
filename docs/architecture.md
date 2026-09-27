@@ -82,5 +82,9 @@ before the bytes reach xterm.js.
 
 ## Next steps
 
+- Generation skills, deferred until the models are chosen: 2D image / animation generation (the
+  embedded image viewer already shows results) and 3D model generation with an embedded viewer.
+  Each is one skill file plus, for 3D, a new embedded view (see "Extending").
+
 - Keyboard navigation across panels, better skill-result rendering (tables, images).
 - Session export, memory across sessions (SH3, later).

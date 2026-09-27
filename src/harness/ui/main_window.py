@@ -36,6 +36,7 @@ from harness.ui.dock import Dock
 from harness.ui.file_explorer import FileExplorer
 from harness.ui.handoff import HandoffExecutor
 from harness.ui.orbit_explorer import OrbitExplorer
+from harness.ui.project_dialogs import ProjectDialog, TextFileDialog
 from harness.ui.sessions_panel import SessionsPanel
 from harness.ui.viewers.image_viewer import ImageViewer
 from harness.ui.viewers.task_list_view import TaskListView
@@ -139,6 +140,11 @@ class MainWindow(QMainWindow):
         self.sessions.open_requested.connect(self.open_session)
         self.sessions.delete_requested.connect(self.delete_session)
         self.sessions.rename_requested.connect(self.rename_session_to)
+        self.sessions.new_project_requested.connect(self.new_project)
+        self.sessions.edit_project_requested.connect(self.edit_project)
+        self.sessions.delete_project_requested.connect(self.delete_project)
+        self.sessions.move_requested.connect(self.move_session)
+        self.sessions.global_context_requested.connect(self.edit_global_context)
         right = QSplitter(Qt.Orientation.Vertical)
         right.addWidget(self.explorer)
         right.addWidget(self.sessions)
@@ -217,6 +223,11 @@ class MainWindow(QMainWindow):
         session_menu = self.menuBar().addMenu("&Session")
         session_menu.addAction(self._action("Change working directory...", self.choose_cwd))
         session_menu.addAction(self._action("Rename...", self.rename_session))
+        session_menu.addSeparator()
+        session_menu.addAction(self._action("Global context...", self.edit_global_context))
+        session_menu.addAction(self._action("Project context...", self.edit_current_project))
+        session_menu.addAction(self._action("New project...", self.new_project))
+        session_menu.addSeparator()
         session_menu.addAction(self._action("Compact older turns now", self.controller.compact))
         session_menu.addAction(self._action("Stop generation", self.controller.stop, "Escape"))
         view_menu = self.menuBar().addMenu("&View")
@@ -280,8 +291,8 @@ class MainWindow(QMainWindow):
         if self.controller.busy:
             self._on_status("Stop the current turn before switching sessions.", True)
             return
-        cwd = Path(self.config.sessions.default_cwd or Path.home())
-        session = self.agent.new_session(cwd)
+        project_id = self.agent.session.project_id if self.agent.session else None
+        session = self.agent.new_session(project_id=project_id)
         self._session_opened(session.id)
 
     def open_session(self, session_id: str) -> None:
@@ -303,7 +314,10 @@ class MainWindow(QMainWindow):
         }
         self.chat.load_transcript(self.agent.session.messages, events)
         self.task_view.set_session(session_id)
-        self.sessions.set_current(session_id)
+        self.sessions.set_current(session_id, self.agent.session.project_id)
+        project = self.core.store.get_project(self.agent.session.project_id)
+        title = self.config.ui.window_title
+        self.setWindowTitle(f"{title} - {project.name}" if project else title)
         self.cwd_label.setText(str(self.agent.session.cwd))
         self.explorer.set_root(str(self.agent.session.cwd))
         self.composer.input.setFocus()
@@ -341,6 +355,83 @@ class MainWindow(QMainWindow):
         count = self.core.store.delete_all()
         self.new_session()
         self.chat.add_notice(f"Deleted {count} session(s).")
+
+    # -- projects and context ------------------------------------------------------
+
+    def new_project(self) -> None:
+        dialog = ProjectDialog(self, "New project", root_dir=self._session_cwd())
+        if dialog.exec() != ProjectDialog.DialogCode.Accepted:
+            return
+        name, root_dir, instructions = dialog.values()
+        project = self.core.store.create_project(name, root_dir, instructions)
+        if self.agent.session is not None and self.agent.session.project_id is None:
+            self.agent.set_project(project.id)  # the session you are in joins the new project
+        self.sessions.refresh()
+        self._session_opened(self.agent.session.id) if self.agent.session else None
+        self.chat.add_notice(f"Project {name!r} created.")
+
+    def edit_project(self, project_id: str) -> None:
+        project = self.core.store.get_project(project_id)
+        if project is None:
+            return
+        dialog = ProjectDialog(
+            self,
+            f"Project: {project.name}",
+            name=project.name,
+            root_dir=project.root_dir or "",
+            instructions=project.instructions,
+        )
+        if dialog.exec() != ProjectDialog.DialogCode.Accepted:
+            return
+        name, root_dir, instructions = dialog.values()
+        self.core.store.update_project(
+            project_id, name=name, root_dir=root_dir, instructions=instructions
+        )
+        if self.agent.session is not None and self.agent.session.project_id == project_id:
+            self.agent.set_project(project_id)  # rebuilds the system prompt
+            self._session_opened(self.agent.session.id)
+        self.sessions.refresh()
+
+    def edit_current_project(self) -> None:
+        if self.agent.session is None or self.agent.session.project_id is None:
+            self.new_project()
+        else:
+            self.edit_project(self.agent.session.project_id)
+
+    def delete_project(self, project_id: str) -> None:
+        project = self.core.store.get_project(project_id)
+        if project is None:
+            return
+        answer = QMessageBox.question(
+            self, "Delete project", f"Delete project {project.name!r}? Its sessions are kept."
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.core.store.delete_project(project_id)
+        if self.agent.session is not None and self.agent.session.project_id == project_id:
+            self.agent.set_project(None)
+            self._session_opened(self.agent.session.id)
+        self.sessions.refresh()
+
+    def move_session(self, session_id: str, project_id: str | None) -> None:
+        if self.agent.session is not None and self.agent.session.id == session_id:
+            self.agent.set_project(project_id)
+            self._session_opened(session_id)
+        else:
+            self.core.store.set_session_project(session_id, project_id)
+        self.sessions.refresh()
+
+    def edit_global_context(self) -> None:
+        dialog = TextFileDialog(
+            self,
+            "Global context",
+            self.core.paths.global_context_file,
+            "Standing facts the model gets in every session: where your research papers are, "
+            "which folder to use for scratch work, tools you prefer, and so on. Plain text or Markdown.",
+        )
+        if dialog.exec() == TextFileDialog.DialogCode.Accepted and self.agent.session is not None:
+            self.agent._refresh_system_prompt()
+            self.chat.add_notice("Global context updated.")
 
     def rename_session(self) -> None:
         if self.agent.session is None:

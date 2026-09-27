@@ -385,3 +385,34 @@ def test_terminal_exit_marks_tab_and_restart_and_plus(qtbot, window, tmp_path):
     win.terminal_panel.tabs.tabCloseRequested.emit(1)
     qtbot.waitUntil(lambda: win.terminal_panel.tabs.count() == 1, timeout=5000)
     assert core.terminals.get("term-2") is None
+
+
+def test_projects_in_sessions_panel(qtbot, window, tmp_path):
+    win, model, core = window
+    model.script += ["a", "b"]
+    win.send_message("first")
+    wait_turn(qtbot, win)
+    first = win.agent.session.id
+    project = core.store.create_project("Thesis", str(tmp_path), "Cite properly.")
+    win.move_session(first, project.id)
+    assert win.agent.session.project_id == project.id
+    assert "Thesis" in win.windowTitle()
+    assert "Cite properly." in win.agent.session.messages[0].content
+    kinds = [
+        (win.sessions.list.item(i).data(0x0102), win.sessions.list.item(i).text().split("\n")[0])
+        for i in range(win.sessions.list.count())
+    ]
+    assert kinds[0] == ("project", "Thesis  (1)")
+    assert kinds[1][0] == "session"
+    win.new_session()  # New follows the current project
+    assert win.agent.session.project_id == project.id
+    assert win.agent.session.cwd == tmp_path
+    win.move_session(win.agent.session.id, None)
+    assert win.agent.session.project_id is None
+    assert "Thesis" not in win.windowTitle()
+    headers = [
+        win.sessions.list.item(i).text()
+        for i in range(win.sessions.list.count())
+        if win.sessions.list.item(i).data(0x0102) == "project"
+    ]
+    assert headers == ["Thesis  (1)", "No project  (1)"]

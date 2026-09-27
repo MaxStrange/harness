@@ -66,6 +66,20 @@ pytest tests/stack -v -s     # the full stack tests: streaming, tool calling, co
                              # summarizer, web reader injection resistance, SearXNG JSON API
 ```
 
+## Projects and context
+
+Two places to tell the model things it should always know:
+
+- **Global context**: `~/.harness/context.md`, edited from Session > Global context (or any editor).
+  Standing facts for every session: where your papers are, which folder is for scratch work, tools
+  you prefer.
+- **Projects**: sessions are grouped by project in the sessions panel. A project has a name, an
+  optional root directory (new sessions start there) and instructions that go into the model's
+  context for every session in it. Create one with the "..." button next to New, or Session > New
+  project; double-click a project header to edit it; right-click a session to move it.
+
+Both are injected into the system prompt, so a change applies to the next message.
+
 ## Resetting
 
 Sessions live in `~/.harness/sessions.sqlite3`. To wipe the chat history and start fresh, use

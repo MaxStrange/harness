@@ -43,7 +43,9 @@ def run(config_path: Path | None = None) -> int:
     window_holder: dict = {}
     ui_bridge = QtUiBridge(lambda handoff: window_holder["window"].handoffs.open_external(handoff))
     core = build_core(config, paths, ui=ui_bridge)
-    agent = Agent(config, core.main_model, core.registry, core.runner, core.services, core.store)
+    agent = Agent(
+        config, core.main_model, core.registry, core.runner, core.services, core.store, paths=paths
+    )
     controller = AgentController(agent, core.broker)
     window = MainWindow(core, agent, controller, ui_bridge)
     window_holder["window"] = window

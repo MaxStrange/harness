@@ -24,6 +24,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     updated REAL NOT NULL,
     tasks TEXT
 );
+CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    root_dir TEXT,
+    instructions TEXT NOT NULL DEFAULT '',
+    created REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -64,6 +71,16 @@ class SessionRecord:
     cwd: str
     created: float
     updated: float
+    project_id: str | None = None
+
+
+@dataclass
+class ProjectRecord:
+    id: str
+    name: str
+    root_dir: str | None
+    instructions: str
+    created: float
 
 
 @dataclass
@@ -98,7 +115,13 @@ class SessionStore:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.executescript(SCHEMA)
+            self._migrate()
             self.fts = self._init_fts()
+
+    def _migrate(self) -> None:
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(sessions)")}
+        if "project_id" not in columns:
+            self._conn.execute("ALTER TABLE sessions ADD COLUMN project_id TEXT")
 
     def _init_fts(self) -> bool:
         try:
@@ -114,15 +137,81 @@ class SessionStore:
 
     # -- sessions ----------------------------------------------------------
 
-    def create_session(self, cwd: str, title: str = "New session") -> SessionRecord:
+    def create_session(
+        self, cwd: str, title: str = "New session", project_id: str | None = None
+    ) -> SessionRecord:
         now = time.time()
-        record = SessionRecord(uuid.uuid4().hex[:12], title, cwd, now, now)
+        record = SessionRecord(uuid.uuid4().hex[:12], title, cwd, now, now, project_id)
         with self._lock:
             self._conn.execute(
-                "INSERT INTO sessions(id, title, cwd, created, updated) VALUES (?,?,?,?,?)",
-                (record.id, title, cwd, now, now),
+                "INSERT INTO sessions(id, title, cwd, created, updated, project_id) "
+                "VALUES (?,?,?,?,?,?)",
+                (record.id, title, cwd, now, now, project_id),
             )
         return record
+
+    def set_session_project(self, session_id: str, project_id: str | None) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE sessions SET project_id=? WHERE id=?", (project_id, session_id)
+            )
+
+    # -- projects ----------------------------------------------------------
+
+    def create_project(
+        self, name: str, root_dir: str | None = None, instructions: str = ""
+    ) -> ProjectRecord:
+        record = ProjectRecord(
+            uuid.uuid4().hex[:12], name, root_dir or None, instructions, time.time()
+        )
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO projects(id, name, root_dir, instructions, created) VALUES (?,?,?,?,?)",
+                (record.id, record.name, record.root_dir, record.instructions, record.created),
+            )
+        return record
+
+    def get_project(self, project_id: str | None) -> ProjectRecord | None:
+        if project_id is None:
+            return None
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        return _project(row) if row else None
+
+    def list_projects(self) -> list[ProjectRecord]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM projects ORDER BY name COLLATE NOCASE"
+            ).fetchall()
+        return [_project(r) for r in rows]
+
+    def update_project(
+        self,
+        project_id: str,
+        *,
+        name: str | None = None,
+        root_dir: str | None = None,
+        instructions: str | None = None,
+    ) -> None:
+        with self._lock:
+            if name is not None:
+                self._conn.execute("UPDATE projects SET name=? WHERE id=?", (name, project_id))
+            if root_dir is not None:
+                self._conn.execute(
+                    "UPDATE projects SET root_dir=? WHERE id=?", (root_dir or None, project_id)
+                )
+            if instructions is not None:
+                self._conn.execute(
+                    "UPDATE projects SET instructions=? WHERE id=?", (instructions, project_id)
+                )
+
+    def delete_project(self, project_id: str) -> None:
+        """Remove the project; its sessions stay, unassigned."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE sessions SET project_id=NULL WHERE project_id=?", (project_id,)
+            )
+            self._conn.execute("DELETE FROM projects WHERE id=?", (project_id,))
 
     def get_session(self, session_id: str) -> SessionRecord | None:
         with self._lock:
@@ -159,6 +248,7 @@ class SessionStore:
             self._conn.execute("DELETE FROM messages")
             self._conn.execute("DELETE FROM skill_events")
             self._conn.execute("DELETE FROM sessions")
+            self._conn.execute("DELETE FROM projects")
             self._conn.execute("VACUUM")
         return count
 
@@ -303,4 +393,12 @@ def _fts_query(text: str) -> str:
 
 
 def _record(row: sqlite3.Row) -> SessionRecord:
-    return SessionRecord(row["id"], row["title"], row["cwd"], row["created"], row["updated"])
+    return SessionRecord(
+        row["id"], row["title"], row["cwd"], row["created"], row["updated"], row["project_id"]
+    )
+
+
+def _project(row: sqlite3.Row) -> ProjectRecord:
+    return ProjectRecord(
+        row["id"], row["name"], row["root_dir"], row["instructions"], row["created"]
+    )
