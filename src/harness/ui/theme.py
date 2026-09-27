@@ -57,5 +57,6 @@ def build_stylesheet(ui: UiConfig) -> str:
     QWidget#toolBubble {{ background: {t.surface}; border: 1px solid {t.border}; border-radius: 8px; }}
     QWidget#approvalBubble {{ background: {t.surface}; border: 2px solid {t.warning}; border-radius: 8px; }}
     QLabel#bubbleText {{ background: transparent; }}
+    QTextEdit#bubbleText {{ background: transparent; border: none; padding: 0; selection-background-color: {t.accent}; selection-color: {t.accent_text}; }}
     QLabel#roleLabel {{ color: {t.text_muted}; font-size: {max(7, ui.font_size - 2)}pt; background: transparent; }}
     """

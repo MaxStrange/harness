@@ -27,8 +27,18 @@ def run(config_path: Path | None = None) -> int:
     from harness.ui.theme import build_stylesheet
 
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+    if sys.platform == "win32":
+        # Without its own application id Windows files the window under python.exe and shows
+        # the Python icon in the taskbar instead of the window icon.
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("MaxStrange.AIHarness")
+        except (AttributeError, OSError):  # pragma: no cover
+            pass
     app = QApplication(sys.argv[:1])
     app.setApplicationName("ai-harness")
+    app.setDesktopFileName("ai-harness")
     paths = HarnessPaths()
     try:
         config = load_config(paths, config_path)
@@ -39,11 +49,19 @@ def run(config_path: Path | None = None) -> int:
     setup_logging(config.logging)
     log.info("harness starting; config %s", config_path or paths.config_file)
     app.setStyleSheet(build_stylesheet(config.ui))
+    from harness.ui.main_window import make_app_icon
+
+    app.setWindowIcon(make_app_icon(config.ui.theme))
 
     window_holder: dict = {}
-    ui_bridge = QtUiBridge(lambda handoff: window_holder["window"].handoffs.open_external(handoff))
+    ui_bridge = QtUiBridge(
+        lambda handoff: window_holder["window"].handoffs.open_external(handoff),
+        lambda name, value: window_holder["window"].apply_preference(name, value),
+    )
     core = build_core(config, paths, ui=ui_bridge)
-    agent = Agent(config, core.main_model, core.registry, core.runner, core.services, core.store)
+    agent = Agent(
+        config, core.main_model, core.registry, core.runner, core.services, core.store, paths=paths
+    )
     controller = AgentController(agent, core.broker)
     window = MainWindow(core, agent, controller, ui_bridge)
     window_holder["window"] = window
@@ -52,8 +70,29 @@ def run(config_path: Path | None = None) -> int:
         window.open_session(sessions[0].id)
     else:
         window.new_session()
-    window.show()
+    warmup = _warm_up_web_engine()
+    if config.ui.panels.start_maximized:
+        window.showMaximized()
+    else:
+        window.show()
     code = app.exec()
+    del warmup
     log.info("harness exiting")
     core.shutdown()
     return code
+
+
+def _warm_up_web_engine():
+    """Create the first web view before the window is shown.
+
+    QtWebEngine starts its GPU process and compositor on the first view, which
+    makes the whole window flicker if that first view is the embedded terminal
+    opened later; paying that cost here, offscreen, keeps it out of sight.
+    """
+    try:
+        from PySide6.QtWebEngineWidgets import QWebEngineView
+    except ImportError:  # pragma: no cover
+        return None
+    view = QWebEngineView()
+    view.setHtml("<html></html>")
+    return view

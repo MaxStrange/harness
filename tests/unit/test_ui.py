@@ -40,7 +40,10 @@ def window(qtbot, harness_home, tmp_path):
     cfg.web.untrusted_dirs = []
     cfg.security.deny_paths = []
     holder = {}
-    bridge = QtUiBridge(lambda h: holder["w"].handoffs.open_external(h))
+    bridge = QtUiBridge(
+        lambda h: holder["w"].handoffs.open_external(h),
+        lambda n, v: holder["w"].apply_preference(n, v),
+    )
     core = build_core(cfg, harness_home, ui=bridge)
     model = FakeModel()
     core.main_model = model  # the fake replaces the network client
@@ -78,13 +81,13 @@ def test_window_streams_reply_and_lists_session(qtbot, window):
     win.composer.input.setPlainText("hi")
     win.composer._submit()
     wait_turn(qtbot, win)
-    from PySide6.QtWidgets import QLabel
+    from harness.ui.chat.message_widget import AssistantBubble
 
-    texts = " ".join(label.text() for label in win.chat._container.findChildren(QLabel))
+    texts = " ".join(b.text for b in win.chat._container.findChildren(AssistantBubble))
     assert "there" in texts
     assert not win.controller.busy
     assert core.store.get_session(win.agent.session.id).title == "hi"
-    assert win.sessions.list.count() == 1
+    assert win.sessions.tree.topLevelItemCount() == 1
 
 
 def test_window_skill_call_shows_bubble_and_handoff_button(qtbot, window, tmp_path):
@@ -186,9 +189,10 @@ def test_session_switching_and_search(qtbot, window):
     second = win.agent.session.id
     win.send_message("tell me about pandas")
     wait_turn(qtbot, win)
-    assert first != second and win.sessions.list.count() == 2
+    assert first != second and win.sessions.tree.topLevelItemCount() == 2
     win.sessions.search.setText("lizards")
-    assert win.sessions.list.count() == 1 and win.sessions.list.item(0).data(0x0100) == first
+    tree = win.sessions.tree
+    assert tree.topLevelItemCount() == 1 and tree.topLevelItem(0).data(0, 0x0100) == first
     win.open_session(first)
     assert win.agent.session.id == first
     from harness.ui.chat.message_widget import AssistantBubble, UserBubble
@@ -237,25 +241,25 @@ def test_sessions_panel_click_keeps_items_and_rename_delegate(qtbot, window):
     win.new_session()
     second = win.agent.session.id
     panel = win.sessions
-    assert panel.list.currentItem().data(0x0100) == second
+    assert panel.tree.currentItem().data(0, 0x0100) == second
     item = panel._find(first)
-    panel.list.itemClicked.emit(item)  # a click on the other session opens it ...
+    panel.tree.itemClicked.emit(item, 0)  # a click on the other session opens it ...
     assert win.agent.session.id == first
     assert panel._find(first) is item  # ... without rebuilding the list
-    assert panel.list.currentItem() is item
+    assert panel.tree.currentItem() is item
     # Inline rename through the delegate.
     from PySide6.QtWidgets import QLineEdit
 
-    delegate = panel.list.itemDelegate()
-    index = panel.list.indexFromItem(item)
-    editor = delegate.createEditor(panel.list, None, index)
+    delegate = panel.tree.itemDelegate()
+    index = panel.tree.indexFromItem(item)
+    editor = delegate.createEditor(panel.tree, None, index)
     delegate.setEditorData(editor, index)
     assert isinstance(editor, QLineEdit) and editor.text() == "first session"
     editor.setText("Renamed")
-    delegate.setModelData(editor, panel.list.model(), index)
+    delegate.setModelData(editor, panel.tree.model(), index)
     assert core.store.get_session(first).title == "Renamed"
-    assert panel._find(first).data(0x0101) == "Renamed"
-    assert panel.list.currentItem().data(0x0100) == first
+    assert panel._find(first).data(0, 0x0101) == "Renamed"
+    assert panel.tree.currentItem().data(0, 0x0100) == first
 
 
 def test_set_cwd_moves_explorer(qtbot, window, tmp_path):
@@ -263,7 +267,7 @@ def test_set_cwd_moves_explorer(qtbot, window, tmp_path):
     sub = tmp_path / "elsewhere"
     sub.mkdir()
     win.set_cwd(str(sub))
-    assert Path(win.explorer.model.rootPath()) == sub
+    assert Path(win.explorer.root) == sub
     assert win.cwd_label.text() == str(sub)
 
 
@@ -385,3 +389,137 @@ def test_terminal_exit_marks_tab_and_restart_and_plus(qtbot, window, tmp_path):
     win.terminal_panel.tabs.tabCloseRequested.emit(1)
     qtbot.waitUntil(lambda: win.terminal_panel.tabs.count() == 1, timeout=5000)
     assert core.terminals.get("term-2") is None
+
+
+def test_projects_in_sessions_panel(qtbot, window, tmp_path):
+    win, model, core = window
+    model.script += ["a", "b"]
+    win.send_message("first")
+    wait_turn(qtbot, win)
+    first = win.agent.session.id
+    project = core.store.create_project("Thesis", str(tmp_path), "Cite properly.")
+    win.move_session(first, project.id)
+    assert win.agent.session.project_id == project.id
+    assert "Thesis" in win.windowTitle()
+    assert "Cite properly." in win.agent.session.messages[0].content
+    tree = win.sessions.tree
+    header = tree.topLevelItem(0)
+    assert header.data(0, 0x0102) == "project" and header.text(0) == "Thesis  (1)"
+    assert header.childCount() == 1 and header.child(0).data(0, 0x0100) == first
+    assert header.isExpanded()
+    win.new_session()  # New follows the current project
+    assert win.agent.session.project_id == project.id
+    assert win.agent.session.cwd == tmp_path
+    win.move_session(win.agent.session.id, None)
+    assert win.agent.session.project_id is None
+    assert "Thesis" not in win.windowTitle()
+    headers = [tree.topLevelItem(i).text(0) for i in range(tree.topLevelItemCount())]
+    assert headers == ["Thesis  (1)", "No project  (1)"]
+    # Folding a project survives a refresh.
+    tree.topLevelItem(0).setExpanded(False)
+    win.sessions.refresh()
+    assert not win.sessions.tree.topLevelItem(0).isExpanded()
+    # Advanced search: filter by project.
+    win.sessions.advanced_button.setChecked(True)
+    win.sessions.search.setText("first")
+    assert win.sessions.tree.topLevelItemCount() == 1
+    win.sessions.project_filter.setCurrentIndex(win.sessions.project_filter.findData(project.id))
+    assert win.sessions.tree.topLevelItemCount() == 1
+    win.sessions.project_filter.setCurrentIndex(win.sessions.project_filter.findData("__none__"))
+    assert (
+        win.sessions.tree.topLevelItemCount() == 0
+        and "No matches" in win.sessions.search_status.text()
+    )
+
+
+def test_new_project_from_a_session_moves_that_session(qtbot, window, monkeypatch):
+    win, model, core = window
+    other = core.store.create_session("/tmp", "other session")
+    win.sessions.refresh()
+    from harness.ui import main_window as mw
+
+    monkeypatch.setattr(mw.ProjectDialog, "exec", lambda self: mw.ProjectDialog.DialogCode.Accepted)
+    monkeypatch.setattr(mw.ProjectDialog, "values", lambda self: ("Fresh", "", ""))
+    win.sessions.new_project_requested.emit(other.id)
+    project = core.store.list_projects()[0]
+    assert project.name == "Fresh"
+    assert core.store.get_session(other.id).project_id == project.id
+    assert win.agent.session.project_id is None  # the open session was not touched
+
+
+def test_critter_menu_and_skill_change_the_sprite(qtbot, window, harness_home):
+    win, model, core = window
+    from harness.config import load_config
+
+    load_config(harness_home)  # a config file to persist into
+    assert win.apply_preference("critter", "turtle") is None
+    assert win.status_strip.critter.kind == "turtle"
+    assert "critter: turtle" in harness_home.config_file.read_text()
+    assert win.apply_preference("critter", "dragon") is not None
+    model.script += [
+        FakeModel.tool_call("harness_settings", action="set", setting="critter", value="songbird"),
+        "Done.",
+    ]
+    win.send_message("make the sprite a songbird")
+    wait_turn(qtbot, win)
+    assert win.status_strip.critter.kind == "songbird"
+    assert win._critter_actions["songbird"].isChecked()
+
+
+def test_moving_into_a_project_adopts_its_root(qtbot, window, tmp_path):
+    win, model, core = window
+    root = tmp_path / "repos" / "harness"
+    root.mkdir(parents=True)
+    project = core.store.create_project("harness", str(root), "")
+    other = core.store.create_session(str(tmp_path / "repos"), "moved later")
+    win.move_session(other.id, project.id)
+    assert core.store.get_session(other.id).cwd == str(root)
+    win.open_session(other.id)
+    assert win.agent.session.cwd == root and Path(win.explorer.root) == root
+    # Changing the project's root carries its sessions along ...
+    new_root = tmp_path / "elsewhere"
+    new_root.mkdir()
+    from harness.ui import main_window as mw
+
+    monkeypatch_values = ("harness", str(new_root), "")
+    mw.ProjectDialog.exec = lambda self: mw.ProjectDialog.DialogCode.Accepted
+    mw.ProjectDialog.values = lambda self: monkeypatch_values
+    try:
+        win.edit_project(project.id)
+    finally:
+        del mw.ProjectDialog.exec, mw.ProjectDialog.values
+    assert core.store.get_session(other.id).cwd == str(new_root)
+    assert win.agent.session.cwd == new_root
+    # ... but not a session that already works inside the new root.
+    inside = new_root / "sub"
+    inside.mkdir()
+    win.set_cwd(str(inside))
+    mw.ProjectDialog.exec = lambda self: mw.ProjectDialog.DialogCode.Accepted
+    mw.ProjectDialog.values = lambda self: ("harness", str(new_root), "changed instructions")
+    try:
+        win.edit_project(project.id)
+    finally:
+        del mw.ProjectDialog.exec, mw.ProjectDialog.values
+    assert win.agent.session.cwd == inside
+
+
+def test_task_list_drag_reorder(qtbot, window):
+    win, model, core = window
+    sid = win.agent.session.id
+    a = core.task_lists.add(sid, "first")
+    b = core.task_lists.add(sid, "second")
+    c = core.task_lists.add(sid, "third")
+    win.perform_handoff(Handoff.tasks())
+    qtbot.waitUntil(lambda: win.task_view.list.count() == 3, timeout=3000)
+    win.task_view.list.reordered.emit([c.id, a.id, b.id])  # what a drop produces
+    assert [t.text for t in core.task_lists.get(sid).tasks] == ["third", "first", "second"]
+    assert win.task_view.list.order() == [c.id, a.id, b.id]
+    assert "drag to reorder" in win.task_view.summary.text()
+
+
+def test_explorer_reveal_in_file_manager(qtbot, window, tmp_path, monkeypatch):
+    win, model, core = window
+    opened = []
+    monkeypatch.setattr(win.handoffs, "open_external", lambda h: opened.append(h) or None)
+    win.explorer.reveal_requested.emit(str(tmp_path))
+    assert opened and opened[0].action == "file_manager" and opened[0].target == str(tmp_path)

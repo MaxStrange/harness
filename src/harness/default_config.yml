@@ -188,4 +188,8 @@ ui:
     explorer_height: 400
     window_width: 1500
     window_height: 950
+    start_maximized: true       # window_width/height apply when un-maximized
   file_explorer_root: "~"         # initial root; the explorer follows the session working directory
+  file_explorer: orbit             # orbit = the orbiting explorer (UI3); tree = a plain tree view
+  file_explorer_show_hidden: false
+  critter: lizard                  # the sprite that animates while the model works: lizard, turtle, sloth, dinosaur, songbird

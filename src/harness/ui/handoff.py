@@ -39,24 +39,32 @@ class HandoffExecutor:
     def _run(self, argv: list[str]) -> str | None:
         if not argv:
             return "empty command"
-        if shutil.which(argv[0]) is None:
+        executable = shutil.which(argv[0])
+        if executable is None:
             return f"{argv[0]!r} is not installed or not on PATH (change handoff settings in the config)"
+        command = [executable, *argv[1:]]
         kwargs = {}
         if sys.platform == "win32":
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        subprocess.Popen(
-            argv,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            **kwargs,
-        )
+            if executable.lower().endswith((".cmd", ".bat")):
+                # VS Code's `code` is code.cmd: batch files need the command interpreter.
+                command = ["cmd.exe", "/d", "/c", *command]
+        try:
+            subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                **kwargs,
+            )
+        except OSError as exc:
+            return f"could not start {executable}: {exc}"
         return None
 
     def _open_editor(self, path: str, line: int | None) -> str | None:
-        template = self.config.editor
-        command = template.format(path=path, line=line or 1)
-        error = self._run(shlex.split(command, posix=sys.platform != "win32"))
+        # Split the template before substituting so paths with spaces or backslashes survive.
+        argv = [part.format(path=path, line=line or 1) for part in shlex.split(self.config.editor)]
+        error = self._run(argv)
         if error is None:
             return None
         log.warning("editor handoff failed (%s); falling back to the default application", error)
@@ -66,8 +74,11 @@ class HandoffExecutor:
     def _open_file_manager(self, path: str) -> str | None:
         target = Path(path)
         if self.config.file_manager:
-            command = self.config.file_manager.format(path=str(target), line=0)
-            return self._run(shlex.split(command, posix=sys.platform != "win32"))
+            argv = [
+                part.format(path=str(target), line=0)
+                for part in shlex.split(self.config.file_manager)
+            ]
+            return self._run(argv)
         if sys.platform == "win32":
             if target.is_dir():
                 return self._run(["explorer", str(target)])

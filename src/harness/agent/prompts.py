@@ -28,9 +28,28 @@ RULES = """
 
 
 def build_system_prompt(
-    startup: str, cwd: Path, skills: list[Skill], *, text_tools: bool = False
+    startup: str,
+    cwd: Path,
+    skills: list[Skill],
+    *,
+    text_tools: bool = False,
+    global_context: str | None = None,
+    project_name: str | None = None,
+    project_root: str | None = None,
+    project_instructions: str | None = None,
 ) -> str:
     parts = [startup.strip(), RULES.strip()]
+    if global_context and global_context.strip():
+        parts.append(
+            "## Standing facts from the user (apply in every session)\n" + global_context.strip()
+        )
+    if project_name:
+        lines = [f"## Project: {project_name}"]
+        if project_root:
+            lines.append(f"- Project root: {project_root}")
+        if project_instructions and project_instructions.strip():
+            lines.append(project_instructions.strip())
+        parts.append("\n".join(lines))
     skill_lines = "\n".join(
         f"- `{s.name}`: {s.description.strip().splitlines()[0]}"
         + (" (needs approval)" if s.needs_approval else "")

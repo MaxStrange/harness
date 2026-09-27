@@ -27,6 +27,7 @@ from harness.model.types import (
     StreamError,
     TextDelta,
 )
+from harness.paths import HarnessPaths
 from harness.skills.base import Handoff, Services, SkillContext
 from harness.skills.registry import SkillRegistry
 from harness.skills.runner import PendingApproval, SkillOutcome, SkillRunner
@@ -61,6 +62,7 @@ class Session:
     id: str
     cwd: Path
     messages: list[Message]
+    project_id: str | None = None
 
 
 class Agent:
@@ -75,8 +77,10 @@ class Agent:
         services: Services,
         store: SessionStore,
         events: AgentEvents | None = None,
+        paths: HarnessPaths | None = None,
     ) -> None:
         self.config = config
+        self.paths = paths or HarnessPaths()
         self.model = model
         self.registry = registry
         self.runner = runner
@@ -89,10 +93,13 @@ class Agent:
 
     # -- sessions ------------------------------------------------------------
 
-    def new_session(self, cwd: Path | None = None) -> Session:
+    def new_session(self, cwd: Path | None = None, project_id: str | None = None) -> Session:
+        project = self.store.get_project(project_id)
+        if cwd is None and project is not None and project.root_dir:
+            cwd = Path(project.root_dir)
         cwd = cwd or Path(self.config.sessions.default_cwd or Path.home())
-        record = self.store.create_session(str(cwd))
-        self.session = Session(record.id, Path(record.cwd), [])
+        record = self.store.create_session(str(cwd), project_id=project.id if project else None)
+        self.session = Session(record.id, Path(record.cwd), [], record.project_id)
         self._ensure_system_prompt()
         return self.session
 
@@ -100,7 +107,9 @@ class Agent:
         record = self.store.get_session(session_id)
         if record is None:
             raise KeyError(session_id)
-        self.session = Session(record.id, Path(record.cwd), self.store.load_messages(session_id))
+        self.session = Session(
+            record.id, Path(record.cwd), self.store.load_messages(session_id), record.project_id
+        )
         if self.services.task_lists is not None:
             self.services.task_lists.load(session_id, self.store.load_tasks(session_id))
         self._ensure_system_prompt()
@@ -111,6 +120,20 @@ class Agent:
         self.session.cwd = cwd
         self.store.set_cwd(self.session.id, str(cwd))
         self._refresh_system_prompt()
+
+    def set_project(self, project_id: str | None) -> None:
+        assert self.session is not None
+        self.session.project_id = project_id
+        self.store.set_session_project(self.session.id, project_id)
+        self._refresh_system_prompt()
+
+    def global_context(self) -> str:
+        path = self.paths.global_context_file
+        try:
+            return path.read_text(encoding="utf-8") if path.exists() else ""
+        except OSError as exc:
+            log.warning("cannot read %s: %s", path, exc)
+            return ""
 
     def _ensure_system_prompt(self) -> None:
         assert self.session is not None
@@ -127,8 +150,15 @@ class Agent:
 
     def _system_prompt(self) -> str:
         assert self.session is not None
+        project = self.store.get_project(self.session.project_id)
         return build_system_prompt(
-            self.config.prompt.startup, self.session.cwd, self.registry.all()
+            self.config.prompt.startup,
+            self.session.cwd,
+            self.registry.all(),
+            global_context=self.global_context(),
+            project_name=project.name if project else None,
+            project_root=project.root_dir if project else None,
+            project_instructions=project.instructions if project else None,
         )
 
     # -- turns -----------------------------------------------------------------

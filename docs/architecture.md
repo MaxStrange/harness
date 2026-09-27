@@ -18,7 +18,8 @@ skills/           the contract (base.py), discovery (registry.py), execution (ru
 terminal/         markers (OSC 7331 capture), pty backends, TerminalSession, manager + jobs,
                   shell/ init scripts, web/ xterm.js page
 agent/            SQLite store with FTS5, system prompt, the agent loop
-ui/               Qt: theme, markdown, handoff execution, thread bridges, widgets, main window
+ui/               Qt: theme, markdown, handoff execution, thread bridges, widgets, main window;
+                  orbit_explorer.py is UI3 (rings of icons seen edge-on), file_explorer.py the tree fallback
 cli.py            the `harness` command
 ```
 
@@ -81,6 +82,9 @@ before the bytes reach xterm.js.
 
 ## Next steps
 
-- The orbiting file explorer (UI3) replaces `ui/file_explorer.py` behind the same two signals.
-- Dock polish, keyboard navigation, better skill-result rendering (tables, images).
+- Generation skills, deferred until the models are chosen: 2D image / animation generation (the
+  embedded image viewer already shows results) and 3D model generation with an embedded viewer.
+  Each is one skill file plus, for 3D, a new embedded view (see "Extending").
+
+- Keyboard navigation across panels, better skill-result rendering (tables, images).
 - Session export, memory across sessions (SH3, later).

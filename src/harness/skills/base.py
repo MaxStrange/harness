@@ -31,7 +31,7 @@ HandoffKind = Literal["external", "embedded", "done"]
 # External actions the UI knows how to perform.
 EXTERNAL_ACTIONS = ("editor", "file_manager", "browser", "default_app")
 # Embedded views the UI provides (UI5). Adding a view means adding it here and in the UI.
-EMBEDDED_VIEWS = ("terminal", "image", "tasks")
+EMBEDDED_VIEWS = ("terminal", "image", "tasks", "explorer")
 
 
 @dataclass
@@ -85,6 +85,11 @@ class Handoff:
     @classmethod
     def tasks(cls, label: str = "Show task list") -> Handoff:
         return cls("embedded", "tasks", label)
+
+    @classmethod
+    def explorer(cls, path: str | Path, label: str = "Show in explorer") -> Handoff:
+        """Jump the file explorer to ``path``."""
+        return cls("embedded", "explorer", label, target=str(path))
 
     @classmethod
     def done(cls, label: str) -> Handoff:
@@ -173,6 +178,10 @@ class UiBridge(Protocol):
 
     def open_embedded(self, handoff: Handoff) -> None: ...
 
+    def set_preference(self, name: str, value: str) -> str | None:
+        """Change a live UI preference (e.g. the critter). Returns an error string or None."""
+        ...
+
 
 class RecordingUi:
     """A :class:`UiBridge` that records calls, for tests and headless use."""
@@ -194,6 +203,11 @@ class RecordingUi:
 
     def open_embedded(self, handoff: Handoff) -> None:
         self.opened.append(handoff)
+
+    def set_preference(self, name: str, value: str) -> str | None:
+        self.preferences = getattr(self, "preferences", {})
+        self.preferences[name] = value
+        return None
 
 
 @dataclass

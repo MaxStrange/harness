@@ -6,13 +6,15 @@ import html
 import json
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QSizePolicy,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -23,6 +25,53 @@ from harness.skills.runner import SkillOutcome
 from harness.ui.markdown import MarkdownRenderer, render_plain
 
 HandoffCallback = Callable[[Handoff], None]
+
+
+class RichTextView(QTextBrowser):
+    """Rich text that is exactly as tall as its content.
+
+    A word-wrapped QLabel inside a scroll area reports heights for the wrong
+    width and leaves blank space below long messages; a text browser lays the
+    document out at the real width and we size the widget to the document.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName("bubbleText")
+        self.setFrameStyle(QFrame.Shape.NoFrame)
+        self.setOpenLinks(False)
+        self.anchorClicked.connect(self._open_link)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.LinksAccessibleByMouse
+        )
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.document().setDocumentMargin(2)
+        self.document().documentLayout().documentSizeChanged.connect(lambda _size: self._fit())
+        self.setFixedHeight(0)
+
+    def _fit(self) -> None:
+        height = int(self.document().size().height()) + 4
+        if height != self.height():
+            self.setFixedHeight(max(0, height))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.document().setTextWidth(self.viewport().width())
+        self._fit()
+
+    def wheelEvent(self, event) -> None:
+        event.ignore()  # let the chat scroll
+
+    def text(self) -> str:
+        return self.toPlainText()
+
+    @staticmethod
+    def _open_link(url: QUrl) -> None:
+        QDesktopServices.openUrl(url)
 
 
 class Bubble(QFrame):
@@ -36,20 +85,11 @@ class Bubble(QFrame):
         self.role_label = QLabel(role_text)
         self.role_label.setObjectName("roleLabel")
         self._layout.addWidget(self.role_label)
-        self.text_label = QLabel()
-        self.text_label.setObjectName("bubbleText")
-        self.text_label.setWordWrap(True)
-        self.text_label.setTextFormat(Qt.TextFormat.RichText)
-        self.text_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-            | Qt.TextInteractionFlag.LinksAccessibleByMouse
-        )
-        self.text_label.setOpenExternalLinks(True)
-        self.text_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.text_label = RichTextView()
         self._layout.addWidget(self.text_label)
 
     def set_html(self, markup: str) -> None:
-        self.text_label.setText(markup)
+        self.text_label.setHtml(markup)
 
 
 class UserBubble(Bubble):
@@ -98,13 +138,10 @@ class SkillBubble(Bubble):
         self.skill = skill
         self.theme = theme
         self.on_handoff = on_handoff
-        self.text_label.setText(
+        self.text_label.setHtml(
             f'<span style="color:{theme.text_muted}">running</span> <code>{html.escape(_short_args(args))}</code>'
         )
-        self.detail_label = QLabel()
-        self.detail_label.setObjectName("bubbleText")
-        self.detail_label.setWordWrap(True)
-        self.detail_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.detail_label = RichTextView()
         self.detail_label.setVisible(False)
         self._layout.addWidget(self.detail_label)
         self.buttons = QWidget()
@@ -136,11 +173,11 @@ class SkillBubble(Bubble):
             status = "rejected"
             color = self.theme.warning
         summary = html.escape(_short_args(outcome.args or outcome.call.arguments))
-        self.text_label.setText(
+        self.text_label.setHtml(
             f'<span style="color:{color}; font-weight:bold">{status}</span> <code>{summary}</code>'
         )
         full = result.data.get("full_content", result.content)
-        self.detail_label.setText(render_plain(full, self.theme))
+        self.detail_label.setHtml(render_plain(full, self.theme))
         self.buttons.setVisible(True)
         if not result.ok:
             self.toggle.setChecked(True)

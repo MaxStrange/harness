@@ -25,15 +25,19 @@ from PySide6.QtWidgets import (
 
 from harness.agent.loop import Agent
 from harness.bootstrap import HarnessCore
+from harness.config import ThemeConfig, set_config_value
 from harness.skills.base import ApprovalDecision, Handoff
 from harness.skills.runner import SkillOutcome
 from harness.terminal.session import TerminalSession
 from harness.ui.bridge import AgentController, QtUiBridge
 from harness.ui.chat.chat_view import ChatView
 from harness.ui.chat.composer import Composer
+from harness.ui.critter import CRITTERS, StatusStrip
 from harness.ui.dock import Dock
 from harness.ui.file_explorer import FileExplorer
 from harness.ui.handoff import HandoffExecutor
+from harness.ui.orbit_explorer import OrbitExplorer
+from harness.ui.project_dialogs import ProjectDialog, TextFileDialog
 from harness.ui.sessions_panel import SessionsPanel
 from harness.ui.viewers.image_viewer import ImageViewer
 from harness.ui.viewers.task_list_view import TaskListView
@@ -53,22 +57,37 @@ class _Relay(QObject):
     health = Signal(str, str, str)
 
 
-def make_app_icon(accent: str, text: str) -> QIcon:
-    pixmap = QPixmap(64, 64)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(QColor(accent))
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawRoundedRect(4, 4, 56, 56, 14, 14)
-    painter.setPen(QColor(text))
-    font = painter.font()
-    font.setPixelSize(36)
-    font.setBold(True)
-    painter.setFont(font)
-    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "H")
-    painter.end()
-    return QIcon(pixmap)
+def _is_within(path: str, root: str) -> bool:
+    try:
+        Path(path).resolve().relative_to(Path(root).resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def make_app_icon(theme: ThemeConfig) -> QIcon:
+    """The lizard on a rounded slate tile, drawn at several sizes for crisp taskbar icons."""
+    from harness.ui.critter import Palette, draw_lizard
+
+    icon = QIcon()
+    palette = Palette(theme)
+    for size in (16, 24, 32, 48, 64, 128, 256):
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor(theme.surface_alt))
+        painter.setPen(Qt.PenStyle.NoPen)
+        radius = size * 0.22
+        painter.drawRoundedRect(0, 0, size, size, radius, radius)
+        # The critter drawing is 64x44; scale it to sit in the middle of the tile.
+        scale = size / 64 * 0.92
+        painter.translate(size * 0.04, (size - 44 * scale) / 2)
+        painter.scale(scale, scale)
+        draw_lizard(painter, palette, 0.0, False, False)
+        painter.end()
+        icon.addPixmap(pixmap)
+    return icon
 
 
 class MainWindow(QMainWindow):
@@ -86,7 +105,7 @@ class MainWindow(QMainWindow):
         self.handoffs = HandoffExecutor(self.config.handoff)
         self.relay = _Relay()
         self.setWindowTitle(ui.window_title)
-        self.setWindowIcon(make_app_icon(self.theme.accent, self.theme.accent_text))
+        self.setWindowIcon(make_app_icon(self.theme))
         self.resize(ui.panels.window_width, ui.panels.window_height)
 
         # -- widgets -------------------------------------------------------
@@ -111,16 +130,26 @@ class MainWindow(QMainWindow):
         self.side_panel.setVisible(False)
 
         self.chat = ChatView(ui, self.perform_handoff, self._resolve_approval)
-        self.composer = Composer()
+        self.composer = Composer(self._session_cwd)
         self.composer.send_requested.connect(self.send_message)
         self.composer.stop_requested.connect(self.controller.stop)
         chat_column = QWidget()
         chat_layout = QVBoxLayout(chat_column)
         chat_layout.setContentsMargins(0, 0, 0, 0)
         chat_layout.addWidget(self.chat, 1)
+        self.status_strip = StatusStrip(self.theme, ui.critter)
+        chat_layout.addWidget(self.status_strip)
         chat_layout.addWidget(self.composer)
 
-        self.explorer = FileExplorer(str(Path(ui.file_explorer_root).expanduser()))
+        explorer_root = str(Path(ui.file_explorer_root).expanduser())
+        if ui.file_explorer == "orbit":
+            self.explorer = OrbitExplorer(explorer_root, self.theme, ui.file_explorer_show_hidden)
+            self.explorer.file_selected.connect(self.composer.insert_text)
+            self.explorer.reveal_requested.connect(
+                lambda path: self.perform_handoff(Handoff.file_manager(path))
+            )
+        else:
+            self.explorer = FileExplorer(explorer_root)
         self.explorer.open_requested.connect(
             lambda path: self.perform_handoff(Handoff.editor(path))
         )
@@ -130,6 +159,11 @@ class MainWindow(QMainWindow):
         self.sessions.open_requested.connect(self.open_session)
         self.sessions.delete_requested.connect(self.delete_session)
         self.sessions.rename_requested.connect(self.rename_session_to)
+        self.sessions.new_project_requested.connect(self.new_project)
+        self.sessions.edit_project_requested.connect(self.edit_project)
+        self.sessions.delete_project_requested.connect(self.delete_project)
+        self.sessions.move_requested.connect(self.move_session)
+        self.sessions.global_context_requested.connect(self.edit_global_context)
         right = QSplitter(Qt.Orientation.Vertical)
         right.addWidget(self.explorer)
         right.addWidget(self.sessions)
@@ -202,10 +236,17 @@ class MainWindow(QMainWindow):
             )
         )
         file_menu.addSeparator()
+        file_menu.addAction(self._action("Delete all sessions...", self.reset_sessions))
+        file_menu.addSeparator()
         file_menu.addAction(self._action("Quit", self.close, "Ctrl+Q"))
         session_menu = self.menuBar().addMenu("&Session")
         session_menu.addAction(self._action("Change working directory...", self.choose_cwd))
         session_menu.addAction(self._action("Rename...", self.rename_session))
+        session_menu.addSeparator()
+        session_menu.addAction(self._action("Global context...", self.edit_global_context))
+        session_menu.addAction(self._action("Project context...", self.edit_current_project))
+        session_menu.addAction(self._action("New project...", lambda: self.new_project(None)))
+        session_menu.addSeparator()
         session_menu.addAction(self._action("Compact older turns now", self.controller.compact))
         session_menu.addAction(self._action("Stop generation", self.controller.stop, "Escape"))
         view_menu = self.menuBar().addMenu("&View")
@@ -213,6 +254,18 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self._action("Image viewer", lambda: self.show_view("image")))
         view_menu.addAction(self._action("Task list", lambda: self.show_view("tasks")))
         view_menu.addAction(self._action("Hide side panel", self.hide_side_panel))
+        view_menu.addSeparator()
+        critter_menu = view_menu.addMenu("Critter")
+        self._critter_actions: dict[str, QAction] = {}
+        for kind in CRITTERS:
+            action = QAction(kind.capitalize(), self)
+            action.setCheckable(True)
+            action.setChecked(kind == self.config.ui.critter)
+            action.triggered.connect(
+                lambda _checked=False, k=kind: self.apply_preference("critter", k)
+            )
+            critter_menu.addAction(action)
+            self._critter_actions[kind] = action
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction(self._action("Skills...", self.show_skills))
         help_menu.addAction(self._action("About", self.show_about))
@@ -238,7 +291,7 @@ class MainWindow(QMainWindow):
         s.turn_started.connect(self._on_turn_started)
         s.text_delta.connect(self.chat.on_text_delta)
         s.assistant_message.connect(self.chat.on_assistant_message)
-        s.skill_started.connect(self.chat.on_skill_started)
+        s.skill_started.connect(self._on_skill_started)
         s.approval_needed.connect(self._on_approval_needed)
         s.skill_finished.connect(self._on_skill_finished)
         s.handoff_requested.connect(self.perform_handoff)
@@ -269,8 +322,8 @@ class MainWindow(QMainWindow):
         if self.controller.busy:
             self._on_status("Stop the current turn before switching sessions.", True)
             return
-        cwd = Path(self.config.sessions.default_cwd or Path.home())
-        session = self.agent.new_session(cwd)
+        project_id = self.agent.session.project_id if self.agent.session else None
+        session = self.agent.new_session(project_id=project_id)
         self._session_opened(session.id)
 
     def open_session(self, session_id: str) -> None:
@@ -292,7 +345,10 @@ class MainWindow(QMainWindow):
         }
         self.chat.load_transcript(self.agent.session.messages, events)
         self.task_view.set_session(session_id)
-        self.sessions.set_current(session_id)
+        self.sessions.set_current(session_id, self.agent.session.project_id)
+        project = self.core.store.get_project(self.agent.session.project_id)
+        title = self.config.ui.window_title
+        self.setWindowTitle(f"{title} - {project.name}" if project else title)
         self.cwd_label.setText(str(self.agent.session.cwd))
         self.explorer.set_root(str(self.agent.session.cwd))
         self.composer.input.setFocus()
@@ -312,6 +368,144 @@ class MainWindow(QMainWindow):
             self.new_session()
         else:
             self.sessions.refresh()
+
+    def reset_sessions(self) -> None:
+        """Factory reset of the chat history (the config, logs and skills stay)."""
+        if self.controller.busy:
+            self._on_status("Stop the current turn before deleting sessions.", True)
+            return
+        answer = QMessageBox.warning(
+            self,
+            "Delete all sessions",
+            "Delete every saved session and its chat history? This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        count = self.core.store.delete_all()
+        self.new_session()
+        self.chat.add_notice(f"Deleted {count} session(s).")
+
+    # -- preferences -------------------------------------------------------------------
+
+    def apply_preference(self, name: str, value: str) -> str | None:
+        """Change a preference now and persist it to the config file. Returns an error or None."""
+        if name == "critter":
+            if value not in CRITTERS:
+                return f"unknown critter {value!r}"
+            self.config.ui.critter = value
+            self.status_strip.critter.set_kind(value)
+            for kind, action in self._critter_actions.items():
+                action.setChecked(kind == value)
+        else:
+            return f"unknown preference {name!r}"
+        try:
+            set_config_value(self.core.paths.config_file, f"ui.{name}", value)
+        except (OSError, ValueError) as exc:
+            log.warning("could not save %s to the config: %s", name, exc)
+            return f"changed for this run, but saving to the config failed: {exc}"
+        return None
+
+    # -- projects and context ------------------------------------------------------
+
+    def new_project(self, for_session: str | None = None) -> None:
+        """Create a project. ``for_session`` (or, from the menu, the open session if it has no
+        project) is moved into it."""
+        dialog = ProjectDialog(self, "New project", root_dir=self._session_cwd())
+        if dialog.exec() != ProjectDialog.DialogCode.Accepted:
+            return
+        name, root_dir, instructions = dialog.values()
+        project = self.core.store.create_project(name, root_dir, instructions)
+        target = for_session if isinstance(for_session, str) else None
+        if (
+            target is None
+            and self.agent.session is not None
+            and self.agent.session.project_id is None
+        ):
+            target = self.agent.session.id
+        if target is not None:
+            self.move_session(target, project.id)
+        else:
+            self.sessions.refresh()
+        self.chat.add_notice(f"Project {name!r} created.")
+
+    def edit_project(self, project_id: str) -> None:
+        project = self.core.store.get_project(project_id)
+        if project is None:
+            return
+        dialog = ProjectDialog(
+            self,
+            f"Project: {project.name}",
+            name=project.name,
+            root_dir=project.root_dir or "",
+            instructions=project.instructions,
+        )
+        if dialog.exec() != ProjectDialog.DialogCode.Accepted:
+            return
+        name, root_dir, instructions = dialog.values()
+        self.core.store.update_project(
+            project_id, name=name, root_dir=root_dir, instructions=instructions
+        )
+        if root_dir and root_dir != (project.root_dir or "") and Path(root_dir).is_dir():
+            # Sessions of this project follow the new root unless they already sit inside it.
+            for record in self.core.store.list_sessions():
+                if record.project_id == project_id and not _is_within(record.cwd, root_dir):
+                    self.core.store.set_cwd(record.id, root_dir)
+                    if self.agent.session is not None and self.agent.session.id == record.id:
+                        self.agent.set_cwd(Path(root_dir))
+        if self.agent.session is not None and self.agent.session.project_id == project_id:
+            self.agent.set_project(project_id)  # rebuilds the system prompt
+            self._session_opened(self.agent.session.id)
+        self.sessions.refresh()
+
+    def edit_current_project(self) -> None:
+        if self.agent.session is None or self.agent.session.project_id is None:
+            self.new_project()
+        else:
+            self.edit_project(self.agent.session.project_id)
+
+    def delete_project(self, project_id: str) -> None:
+        project = self.core.store.get_project(project_id)
+        if project is None:
+            return
+        answer = QMessageBox.question(
+            self, "Delete project", f"Delete project {project.name!r}? Its sessions are kept."
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.core.store.delete_project(project_id)
+        if self.agent.session is not None and self.agent.session.project_id == project_id:
+            self.agent.set_project(None)
+            self._session_opened(self.agent.session.id)
+        self.sessions.refresh()
+
+    def move_session(self, session_id: str, project_id: str | None) -> None:
+        """Move a session into a project; it also adopts the project's root directory."""
+        project = self.core.store.get_project(project_id)
+        root = Path(project.root_dir) if project and project.root_dir else None
+        if self.agent.session is not None and self.agent.session.id == session_id:
+            self.agent.set_project(project_id)
+            if root is not None and root.is_dir():
+                self.agent.set_cwd(root)
+            self._session_opened(session_id)
+        else:
+            self.core.store.set_session_project(session_id, project_id)
+            if root is not None and root.is_dir():
+                self.core.store.set_cwd(session_id, str(root))
+        self.sessions.refresh()
+
+    def edit_global_context(self) -> None:
+        dialog = TextFileDialog(
+            self,
+            "Global context",
+            self.core.paths.global_context_file,
+            "Standing facts the model gets in every session: where your research papers are, "
+            "which folder to use for scratch work, tools you prefer, and so on. Plain text or Markdown.",
+        )
+        if dialog.exec() == TextFileDialog.DialogCode.Accepted and self.agent.session is not None:
+            self.agent._refresh_system_prompt()
+            self.chat.add_notice("Global context updated.")
 
     def rename_session(self) -> None:
         if self.agent.session is None:
@@ -358,16 +552,20 @@ class MainWindow(QMainWindow):
     def _on_turn_started(self) -> None:
         self.composer.set_busy(True)
         self.turn_status.setText("Thinking...")
+        self.status_strip.set_busy(True)
+        self.status_strip.set_status("Thinking...")
         self.chat.on_turn_started()
 
     def _on_turn_finished(self, cancelled: bool) -> None:
         self.composer.set_busy(False)
         self.turn_status.setText("")
+        self.status_strip.set_busy(False)
         self.chat.on_turn_finished(cancelled)
         self.sessions.refresh()
 
     def _on_status(self, text: str, error: bool) -> None:
         self.turn_status.setText(text)
+        self.status_strip.set_status(text, error)
         self.turn_status.setObjectName("statusError" if error else "status")
         self.turn_status.style().unpolish(self.turn_status)
         self.turn_status.style().polish(self.turn_status)
@@ -378,15 +576,21 @@ class MainWindow(QMainWindow):
     def _on_approval_needed(self, pending) -> None:
         self.chat.on_approval_needed(pending)
         self.turn_status.setText("Waiting for your approval")
+        self.status_strip.set_status("Waiting for your approval")
         if not self.isActiveWindow():
             self.show_notification("Approval needed", pending.request.title)
 
     def _resolve_approval(self, approval_id: str, decision: ApprovalDecision) -> bool:
         return self.core.broker.resolve(approval_id, decision)
 
+    def _on_skill_started(self, call_id: str, skill: str, args: dict) -> None:
+        self.chat.on_skill_started(call_id, skill, args)
+        self.status_strip.set_status(f"Running {skill}...")
+
     def _on_skill_finished(self, outcome: SkillOutcome) -> None:
         self.chat.on_skill_finished(outcome)
         self.turn_status.setText("Thinking...")
+        self.status_strip.set_status("Thinking...")
 
     # -- handoffs and views -------------------------------------------------------
 
@@ -414,6 +618,9 @@ class MainWindow(QMainWindow):
             self.show_view("image")
         elif handoff.action == "tasks":
             self.show_view("tasks")
+        elif handoff.action == "explorer":
+            if handoff.target:
+                self.explorer.reveal(handoff.target)
         else:
             self._on_status(f"Unknown embedded view {handoff.action!r}", True)
 
@@ -446,11 +653,9 @@ class MainWindow(QMainWindow):
 
     def _on_terminal_created(self, session: TerminalSession) -> None:
         self.terminal_panel.add_session(session)
-        self.dock.set_badge("terminal", len(self.terminal_panel.alive_names()))
 
     def _on_terminal_exited(self, session: TerminalSession) -> None:
         self.terminal_panel.mark_exited(session.name)
-        self.dock.set_badge("terminal", len(self.terminal_panel.alive_names()))
 
     def new_terminal(self) -> None:
         name = self.core.terminals.next_name()
@@ -464,12 +669,10 @@ class MainWindow(QMainWindow):
         session = self.core.terminals.get_or_create(name, self._session_cwd())
         self.terminal_panel.add_session(session)
         self.terminal_panel.show_session(name)
-        self.dock.set_badge("terminal", len(self.terminal_panel.alive_names()))
 
     def close_terminal(self, name: str) -> None:
         self.core.terminals.close(name)
         self.terminal_panel.remove_session(name)
-        self.dock.set_badge("terminal", len(self.terminal_panel.alive_names()))
 
     # -- notifications and health -----------------------------------------------------
 

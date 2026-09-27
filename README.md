@@ -10,17 +10,19 @@ The requirements are in [docs/requirements.md](docs/requirements.md); the design
 Milestones 1 and 2 are implemented, plus most of milestone 3's skills:
 
 - Layout: viewer dock (far left, magnifying), embedded side panel (terminal / image viewer / task
-  list), central chat with Markdown and syntax highlighting, file explorer (standard tree for now)
-  and sessions panel with full-text search.
+  list), central chat with Markdown and syntax highlighting, the orbiting file explorer (UI3, with
+  `ui.file_explorer: tree` as a plain fallback) and sessions panel with full-text search.
 - Model bring-up: streaming, native or text tool calling, stop, automatic and manual compaction,
   offline status without losing sessions.
-- All twenty skills from the requirements, each with its handoff.
+- All twenty skills from the requirements, each with its handoff, plus `kicad_inspect` (schematic
+  hierarchy, BOM, board, nets straight from KiCad files), `directory_tree` (a tree a few levels
+  deep with big folders summarized) and `harness_settings` (ask the model to change the sprite).
 - Security: command approval with summarizer, protected paths, private-network blocking, web reader
   in front of all web content, untrusted locations, raw URL gate.
 - Logging (three rolling channels), single YAML config with commented defaults, SQLite sessions.
 
-Not yet done: the orbiting file explorer (UI3), dock polish, and anything that needs a real screen or
-the real model stack (see "Untested" below).
+Not yet done: memory across sessions (SH3, deliberately later) and further polish once the explorer and
+dock have been used for a while.
 
 ## Install
 
@@ -66,6 +68,47 @@ pytest tests/stack -v -s     # the full stack tests: streaming, tool calling, co
                              # summarizer, web reader injection resistance, SearXNG JSON API
 ```
 
+## Icon and desktop entry
+
+The window and tray icon is the lizard. Windows uses it in the taskbar directly. On Linux, run
+`harness --install-desktop-entry` once to write a `.desktop` file and icon under `~/.local/share`
+so launchers and the taskbar show the lizard instead of a generic icon.
+
+## The critter
+
+The sprite above the message box animates while the model works. Pick another one under
+View > Critter (lizard, turtle, sloth, dinosaur, songbird), or just ask the model; the choice is
+saved to `ui.critter` in the config.
+
+## Projects and context
+
+Two places to tell the model things it should always know:
+
+- **Global context**: `~/.harness/context.md`, edited from Session > Global context (or any editor).
+  Standing facts for every session: where your papers are, which folder is for scratch work, tools
+  you prefer.
+- **Projects**: sessions are grouped by project in the sessions panel. A project has a name, an
+  optional root directory (new sessions start there) and instructions that go into the model's
+  context for every session in it. Create one with the "..." button next to New, or Session > New
+  project; double-click a project header to edit it; right-click a session to move it.
+
+Both are injected into the system prompt, so a change applies to the next message.
+
+The sessions panel groups sessions under collapsible project headers. Search covers every session;
+**Advanced** adds filters by project, speaker and age, plus regex and case-sensitive matching.
+
+## Resetting
+
+Sessions live in `~/.harness/sessions.sqlite3`. To wipe the chat history and start fresh, use
+File > Delete all sessions in the app, or from a shell:
+
+```bash
+harness --reset-sessions     # asks for confirmation; config, logs and skills are untouched
+```
+
+Deleting the whole `~/.harness/` folder is the full factory reset (the next launch rewrites the
+default config; keep a copy of `config.yml` and `secrets/` if you want them back).
+
 ## Tests
 
 ```bash
@@ -81,8 +124,8 @@ bash), the session store and the agent loop, and the Qt widgets offscreen.
 
 This code was written without a display or the model stack, so the following need a real run:
 
-- The look of the window on a real screen (only offscreen screenshots so far), the dock's
-  magnification feel, splitter defaults.
+- The feel of the orbiting explorer (roll speed, snap, the expand animation) and the dock's
+  magnification; the constants at the top of `ui/orbit_explorer.py` and `ui/dock.py` tune them.
 - The xterm.js terminal inside QtWebEngine (the Python side and the marker capture are tested; the
   JavaScript page and QWebChannel wiring are not).
 - Windows: PowerShell hooks in `src/harness/terminal/shell/harness.ps1`, pywinpty, `explorer`

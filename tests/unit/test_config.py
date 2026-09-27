@@ -91,3 +91,43 @@ def test_api_key_and_api_key_file_are_exclusive():
     )
     with pytest.raises(ConfigError, match="not both"):
         parse_config(text, "cfg")
+
+
+def test_reset_sessions_cli(harness_home, monkeypatch, capsys):
+    from harness.agent.store import SessionStore
+    from harness.cli import main
+
+    load_config(harness_home)
+    store = SessionStore(harness_home.sessions_db)
+    store.create_session("/tmp", "old")
+    store.close()
+    monkeypatch.setattr("builtins.input", lambda prompt: "no")
+    assert main(["--reset-sessions"]) == 1
+    monkeypatch.setattr("builtins.input", lambda prompt: "yes")
+    assert main(["--reset-sessions"]) == 0
+    assert "deleted 1 session" in capsys.readouterr().out
+    assert SessionStore(harness_home.sessions_db).list_sessions() == []
+
+
+def test_default_config_follows_harness_home(harness_home):
+    text = default_config_text()
+    assert str(harness_home.home) in text and "~/.harness" not in text
+    cfg = parse_config(text, "default")
+    assert cfg.sessions.db_path == str(harness_home.sessions_db)
+
+
+def test_set_config_value_keeps_comments(tmp_path):
+    from harness.config import set_config_value
+
+    path = tmp_path / "config.yml"
+    path.write_text(
+        "# top\nui:\n  window_title: AI Harness\n  critter: lizard   # sprite\n\nweb:\n  searxng_url: http://x\n"
+    )
+    set_config_value(path, "ui.critter", "turtle")
+    text = path.read_text()
+    assert "  critter: turtle  # sprite" in text and "# top" in text and "searxng_url" in text
+    set_config_value(path, "ui.font_size", "12")
+    assert "  font_size: '12'" in path.read_text() or "  font_size: 12" in path.read_text()
+    set_config_value(path, "handoff.editor", "vim {path}")
+    assert "handoff:\n  editor: vim {path}" in path.read_text()
+    assert parse_config(path.read_text(), "c").ui.critter == "turtle"

@@ -45,6 +45,11 @@ class HarnessPaths:
         return self.home / "skills"
 
     @property
+    def global_context_file(self) -> Path:
+        """Standing facts the model gets in every session (a Markdown file you edit)."""
+        return self.home / "context.md"
+
+    @property
     def downloads_dir(self) -> Path:
         """Default untrusted location for anything that arrives from the web."""
         return self.home / "downloads"

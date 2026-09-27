@@ -428,3 +428,12 @@ def test_terminal_skill_runs_and_hands_off(registry, world):
         )
     finally:
         manager.close_all()
+
+
+def test_task_store_reorder():
+    store = TaskListStore()
+    a, b, c = (store.add("s", t) for t in ("a", "b", "c"))
+    store.reorder("s", [c.id, a.id])
+    assert [t.text for t in store.get("s").tasks] == ["c", "a", "b"]
+    store.reorder("s", ["nope", b.id])
+    assert [t.text for t in store.get("s").tasks] == ["b", "c", "a"]

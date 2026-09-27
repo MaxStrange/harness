@@ -32,7 +32,6 @@ class DockItem:
     name: str
     label: str
     glyph: str
-    badge: int = 0
 
 
 class Dock(QWidget):
@@ -60,12 +59,6 @@ class Dock(QWidget):
 
     def set_active(self, name: str | None) -> None:
         self.active = name
-        self.update()
-
-    def set_badge(self, name: str, count: int) -> None:
-        for item in self.items:
-            if item.name == name:
-                item.badge = count
         self.update()
 
     # -- geometry ----------------------------------------------------------
@@ -191,14 +184,4 @@ class Dock(QWidget):
             painter.setFont(font)
             painter.setPen(QColor(self.theme.accent_text if active else self.theme.text))
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, item.glyph)
-            if item.badge:
-                badge = QRectF(rect.right() - 10, rect.top() - 4, 16, 16)
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QColor(self.theme.warning))
-                painter.drawEllipse(badge)
-                small = QFont()
-                small.setPixelSize(10)
-                painter.setFont(small)
-                painter.setPen(QColor(self.theme.accent_text))
-                painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, str(min(item.badge, 9)))
         painter.end()
