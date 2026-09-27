@@ -142,20 +142,42 @@ class Schematic:
     errors: list[str] = field(default_factory=list)
 
 
+def unescape_name(name: str) -> str:
+    """KiCad writes ``/`` in net and label names as ``{slash}``."""
+    return name.replace("{slash}", "/")
+
+
+def _instance_reference(sym: list, instance_path: str) -> tuple[str, int] | None:
+    """The reference and unit for this sheet instance from the symbol's ``instances`` block
+    (a sheet file used several times gets a different reference in each)."""
+    instances = child(sym, "instances")
+    if instances is None:
+        return None
+    for project in children(instances, "project"):
+        for path in children(project, "path"):
+            if len(path) > 1 and str(path[1]) == instance_path:
+                ref = child(path, "reference")
+                unit = child(path, "unit")
+                if ref and len(ref) > 1:
+                    return str(ref[1]), int(unit[1]) if unit and len(unit) > 1 else 1
+    return None
+
+
 def load_schematic(path: str | Path, *, follow_sheets: bool = True) -> Schematic:
-    """Read a schematic and (by default) the hierarchy below it."""
+    """Read a schematic and (by default) every sheet instance in the hierarchy below it."""
     root = Path(path)
     result = Schematic(str(root), None)
-    seen: set[Path] = set()
+    visited: set[tuple[Path, str]] = set()
 
-    def visit(file: Path, sheet_name: str) -> None:
+    def visit(file: Path, sheet_name: str, instance_path: str | None, depth: int) -> None:
         try:
             resolved = file.resolve()
         except OSError:
             resolved = file
-        if resolved in seen:
+        key = (resolved, instance_path or "")
+        if key in visited or depth > 40:
             return
-        seen.add(resolved)
+        visited.add(key)
         try:
             node = parse_sexpr(file.read_text(encoding="utf-8", errors="replace"))
         except (OSError, SExprError) as exc:
@@ -167,28 +189,36 @@ def load_schematic(path: str | Path, *, follow_sheets: bool = True) -> Schematic
         version = child(node, "version")
         if result.version is None and version and len(version) > 1:
             result.version = int(version[1])
+        if instance_path is None:  # the root sheet's path is its own uuid
+            uuid = child(node, "uuid")
+            instance_path = "/" + str(uuid[1]) if uuid and len(uuid) > 1 else "/"
         for sym in children(node, "symbol"):
             lib_id = child(sym, "lib_id")
             if lib_id is None:
-                continue  # entries inside (lib_symbols ...) are handled as symbols, not instances
-            unit = child(sym, "unit")
+                continue  # entries inside (lib_symbols ...) are definitions, not placed parts
+            unit_node = child(sym, "unit")
+            reference = prop(sym, "Reference") or "?"
+            unit = int(unit_node[1]) if unit_node and len(unit_node) > 1 else 1
+            per_instance = _instance_reference(sym, instance_path)
+            if per_instance is not None:
+                reference, unit = per_instance
             result.components.append(
                 Component(
-                    reference=prop(sym, "Reference") or "?",
+                    reference=reference,
                     value=prop(sym, "Value") or "",
                     footprint=prop(sym, "Footprint") or "",
                     lib_id=str(lib_id[1]) if len(lib_id) > 1 else "",
                     sheet=sheet_name,
-                    unit=int(unit[1]) if unit and len(unit) > 1 else 1,
+                    unit=unit,
                     at=_at(sym),
                     dnp=bool(_flag(sym, "dnp")),
                     in_bom=_flag(sym, "in_bom") is not False,
                 )
             )
-        for kind in ("label", "global_label", "hierarchical_label", "power"):
+        for kind in ("label", "global_label", "hierarchical_label"):
             for lab in children(node, kind):
                 if len(lab) > 1:
-                    result.labels.setdefault(kind, []).append(str(lab[1]))
+                    result.labels.setdefault(kind, []).append(unescape_name(str(lab[1])))
         result.wires += len(children(node, "wire"))
         result.junctions += len(children(node, "junction"))
         result.no_connects += len(children(node, "no_connect"))
@@ -197,10 +227,18 @@ def load_schematic(path: str | Path, *, follow_sheets: bool = True) -> Schematic
             file_name = prop(sheet, "Sheetfile") or prop(sheet, "Sheet file") or ""
             sub_path = file.parent / file_name if file_name else file
             result.sheets.append(Sheet(name, file_name, str(sub_path)))
+            uuid = child(sheet, "uuid")
+            sheet_uuid = str(uuid[1]) if uuid and len(uuid) > 1 else name
+            sub_instance = instance_path.rstrip("/") + "/" + sheet_uuid
             if follow_sheets and file_name:
-                visit(sub_path, f"{sheet_name}/{name}" if sheet_name != "/" else f"/{name}")
+                visit(
+                    sub_path,
+                    f"{sheet_name}/{name}" if sheet_name != "/" else f"/{name}",
+                    sub_instance,
+                    depth + 1,
+                )
 
-    visit(root, "/")
+    visit(root, "/", None, 0)
     return result
 
 
@@ -235,6 +273,7 @@ class Board:
     tracks: int = 0
     vias: int = 0
     zones: list[tuple[str, str]] = field(default_factory=list)  # (net name, layer)
+    teardrops: int = 0
     outline: tuple[float, float, float, float] | None = None  # min x, min y, max x, max y
     errors: list[str] = field(default_factory=list)
 
@@ -267,7 +306,7 @@ def load_pcb(path: str | Path) -> Board:
             board.thickness = float(thickness[1])
     for net in children(node, "net"):
         if len(net) > 2:
-            board.nets[int(net[1])] = str(net[2])
+            board.nets[int(net[1])] = unescape_name(str(net[2]))
     for fp in children(node, "footprint") + children(node, "module"):
         layer = child(fp, "layer")
         footprint = Footprint(
@@ -282,7 +321,7 @@ def load_pcb(path: str | Path) -> Board:
             footprint.pads.append(
                 Pad(
                     number=str(pad[1]) if len(pad) > 1 else "",
-                    net=str(net[2]) if net and len(net) > 2 else "",
+                    net=unescape_name(str(net[2])) if net and len(net) > 2 else "",
                     kind=str(pad[2]) if len(pad) > 2 else "",
                 )
             )
@@ -290,11 +329,15 @@ def load_pcb(path: str | Path) -> Board:
     board.tracks = len(children(node, "segment")) + len(children(node, "arc"))
     board.vias = len(children(node, "via"))
     for zone in children(node, "zone"):
+        name = child(zone, "name")
+        if name and len(name) > 1 and str(name[1]).startswith("$teardrop"):
+            board.teardrops += 1  # KiCad 8+ stores teardrops as zones; not real copper pours
+            continue
         net_name = child(zone, "net_name")
         layer = child(zone, "layer") or child(zone, "layers")
         board.zones.append(
             (
-                str(net_name[1]) if net_name and len(net_name) > 1 else "",
+                unescape_name(str(net_name[1])) if net_name and len(net_name) > 1 else "",
                 " ".join(str(x) for x in layer[1:]) if layer else "",
             )
         )

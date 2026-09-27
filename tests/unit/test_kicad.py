@@ -158,3 +158,45 @@ def test_skill_actions(project):
     assert nets.content.strip().endswith("SDA: R1.2, R2.2")
     missing = runner.execute(ToolCall("c", "kicad_inspect", {"path": "nope", "action": "bom"}), ctx)
     assert not missing.result.ok and "does not exist" in missing.result.content
+
+
+REUSED_ROOT = """(kicad_sch (version 20250114) (generator "eeschema") (generator_version "9.0") (uuid "root-uuid")
+  (sheet (at 0 0) (size 10 10) (uuid "sheet-a") (property "Sheetname" "left" (at 0 0 0)) (property "Sheetfile" "amp.kicad_sch" (at 0 0 0)))
+  (sheet (at 20 0) (size 10 10) (uuid "sheet-b") (property "Sheetname" "right" (at 0 0 0)) (property "Sheetfile" "amp.kicad_sch" (at 0 0 0)))
+  (label "VPP{slash}MCLR" (at 1 1 0))
+)"""
+
+REUSED_AMP = """(kicad_sch (version 20250114) (uuid "amp-uuid")
+  (symbol (lib_id "Device:R") (at 1 1 0) (unit 1)
+    (property "Reference" "R201" (at 0 0 0)) (property "Value" "1k" (at 0 0 0)) (property "Footprint" "R_0603" (at 0 0 0))
+    (instances (project "reused"
+      (path "/root-uuid/sheet-a" (reference "R201") (unit 1))
+      (path "/root-uuid/sheet-b" (reference "R301") (unit 1)))))
+)"""
+
+TEARDROP_PCB = """(kicad_pcb (version 20241229) (generator "pcbnew") (generator_version "9.0")
+  (general (thickness 1.6) (legacy_teardrops no)) (layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+  (net 0 "") (net 1 "VPP{slash}MCLR")
+  (footprint "R" (layer "F.Cu") (at 1 1) (property "Reference" "R1" (at 0 0 0)) (property "Value" "1k" (at 0 0 0))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VPP{slash}MCLR")))
+  (zone (net 1) (net_name "VPP{slash}MCLR") (layer "F.Cu") (uuid "z1") (name "$teardrop_padvia$") (attr (teardrop (type padvia))) (polygon (pts (xy 0 0))))
+  (zone (net 1) (net_name "VPP{slash}MCLR") (layer "B.Cu") (uuid "z2") (polygon (pts (xy 0 0))))
+  (zone (net 1) (net_name "VPP{slash}MCLR") (layer "B.Cu") (uuid "z3") (polygon (pts (xy 0 0))))
+)"""
+
+
+def test_kicad9_reused_sheets_teardrops_and_slash(tmp_path):
+    (tmp_path / "reused.kicad_sch").write_text(REUSED_ROOT)
+    (tmp_path / "amp.kicad_sch").write_text(REUSED_AMP)
+    sch = kicad.load_schematic(tmp_path / "reused.kicad_sch")
+    assert sch.errors == []
+    assert sorted((c.reference, c.sheet) for c in sch.components) == [
+        ("R201", "/left"),
+        ("R301", "/right"),
+    ]
+    assert kicad.bill_of_materials(sch)[0]["references"] == ["R201", "R301"]
+    assert sch.labels == {"label": ["VPP/MCLR"]}
+    (tmp_path / "reused.kicad_pcb").write_text(TEARDROP_PCB)
+    board = kicad.load_pcb(tmp_path / "reused.kicad_pcb")
+    assert board.teardrops == 1 and board.zones == [("VPP/MCLR", "B.Cu"), ("VPP/MCLR", "B.Cu")]
+    assert kicad.board_nets(board) == {"VPP/MCLR": ["R1.1"]}

@@ -233,9 +233,18 @@ def _format_pcb(board: kicad.Board, fps: list[kicad.Footprint]) -> str:
         f"{len(board.footprints)} footprints, {len([n for n in board.nets.values() if n])} nets, {board.tracks} track segments, {board.vias} vias",
     ]
     if board.zones:
+        counts: dict[tuple[str, str], int] = {}
+        for zone in board.zones:
+            counts[zone] = counts.get(zone, 0) + 1
         lines.append(
-            "zones: " + ", ".join(f"{net or '?'} on {layer}" for net, layer in board.zones)
+            "zones: "
+            + ", ".join(
+                f"{net or '?'} on {layer}" + (f" (x{n})" if n > 1 else "")
+                for (net, layer), n in counts.items()
+            )
         )
+    if board.teardrops:
+        lines.append(f"teardrops: {board.teardrops}")
     lines.append(
         f"{'REF':<8} {'VALUE':<18} {'FOOTPRINT':<40} {'LAYER':<6} {'X':>8} {'Y':>8} {'ROT':>5}  PADS"
     )
