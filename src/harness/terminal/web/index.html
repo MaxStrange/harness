@@ -1,0 +1,62 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="xterm.css">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: var(--bg, #20252a); }
+  #terminal { width: 100%; height: 100%; }
+  .xterm .xterm-viewport { background-color: transparent !important; }
+</style>
+</head>
+<body>
+<div id="terminal"></div>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script src="xterm.js"></script>
+<script src="addon-fit.js"></script>
+<script>
+(function () {
+  var params = new URLSearchParams(window.location.search);
+  var theme = {};
+  try { theme = JSON.parse(params.get("theme") || "{}"); } catch (e) {}
+  document.documentElement.style.setProperty("--bg", theme.background || "#20252a");
+  var term = new Terminal({
+    cursorBlink: true,
+    allowProposedApi: true,
+    fontFamily: params.get("font") || "monospace",
+    fontSize: parseInt(params.get("size") || "12", 10),
+    scrollback: parseInt(params.get("scrollback") || "10000", 10),
+    theme: theme
+  });
+  var fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(document.getElementById("terminal"));
+  fit.fit();
+
+  function b64ToBytes(b64) {
+    var bin = atob(b64), bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+  function bytesToB64(str) {
+    var bytes = new TextEncoder().encode(str), bin = "";
+    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+
+  new QWebChannel(qt.webChannelTransport, function (channel) {
+    var bridge = channel.objects.terminal;
+    bridge.output.connect(function (b64) { term.write(b64ToBytes(b64)); });
+    bridge.cleared.connect(function () { term.reset(); });
+    term.onData(function (data) { bridge.input(bytesToB64(data)); });
+    term.onBinary(function (data) { bridge.input(btoa(data)); });
+    term.onResize(function (size) { bridge.resized(size.cols, size.rows); });
+    window.addEventListener("resize", function () { fit.fit(); });
+    bridge.resized(term.cols, term.rows);
+    bridge.ready();
+    term.focus();
+  });
+})();
+</script>
+</body>
+</html>

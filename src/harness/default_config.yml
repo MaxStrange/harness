@@ -1,0 +1,191 @@
+# AI Harness v2 configuration.
+#
+# This file was written on first launch. Every setting here is optional: delete
+# a line and the built-in default (the value shown) is used. Paths may start
+# with "~". Settings are validated at startup and a bad value produces an error
+# that names the setting.
+
+models:
+  # All three roles are served by the llama.cpp router on the LLM machine, which
+  # loads models on demand (at most two at once) and requires an API key. The key
+  # lives in its own file, never in this config: copy the router's key file to
+  # ~/.harness/secrets/llama-api-key (first line = the key).
+
+  # The main agent model. llama.cpp server with tool calling enabled
+  # (`--jinja`), OpenAI-compatible API.
+  main:
+    endpoints:
+      - base_url: http://10.0.0.228:18080/v1
+        model: gpt-oss-120b     # the model name the server reports / expects
+        api_key: null           # the key inline; prefer api_key_file (set one, not both)
+        api_key_file: ~/.harness/secrets/llama-api-key
+        timeout_s: 120
+    temperature: 0.2
+    max_tokens: 4096
+    # Tokens; used to decide when to compact. Keep it below the server's context
+    # (131072 here): the estimate (~4 chars/token, tool schemas not counted)
+    # undercounts code and JSON, so the real prompt can run well past it.
+    context_window: 98304
+    tool_format: native         # native = OpenAI function calling; text = parse ```tool_call blocks
+    # Keep this many tokens (estimate) free before compaction kicks in.
+    compaction_threshold: 0.8
+    compaction_keep_last: 6     # recent messages kept verbatim when compacting
+    auto_compact: true
+
+  # Small model that turns model-written shell commands into plain language for
+  # the approval dialog. Endpoints are tried in order, so a model on this machine
+  # can go first with the LLM machine as fallback. If none answers, approval still
+  # works and the harness shows "Summarizer model offline: <reason>" instead.
+  summarizer:
+    enabled: true
+    endpoints:
+      - base_url: http://10.0.0.228:18080/v1
+        model: qwen3-coder-30b
+        api_key: null
+        api_key_file: ~/.harness/secrets/llama-api-key
+        timeout_s: 20
+    temperature: 0.0
+    max_tokens: 256
+
+  # The model that reads untrusted web content (and files in untrusted
+  # locations) so the main model never sees raw web text. Should be a different
+  # model from the main model. Sharing the summarizer's model keeps the router
+  # at two resident models.
+  web_reader:
+    enabled: true
+    endpoints:
+      - base_url: http://10.0.0.228:18080/v1
+        model: qwen3-coder-30b
+        api_key: null
+        api_key_file: ~/.harness/secrets/llama-api-key
+        timeout_s: 120
+    temperature: 0.0
+    max_tokens: 2048
+    max_input_chars: 60000      # web pages are truncated to this before reading
+
+web:
+  searxng_url: http://10.0.0.228:18082   # the only search backend; no fallback
+  # Hosts on the private network that web skills may talk to. One host at a time,
+  # never subnets. The SearXNG host is always allowed implicitly.
+  allowed_private_hosts: []
+  user_agent: "ai-harness/0.1 (+local)"
+  fetch_timeout_s: 30
+  max_page_bytes: 5000000
+  max_redirects: 5
+  # Anything under these directories is treated as untrusted web content: the
+  # read-only file skills route it through the web reader.
+  untrusted_dirs:
+    - ~/.harness/downloads
+    - ~/Downloads
+  # Maximum raw characters the Get URL (raw) skill hands to the main model.
+  raw_url_max_chars: 20000
+
+security:
+  # Files and folders the model may not read without explicit approval. Entries
+  # that do not exist on this machine are ignored.
+  deny_paths:
+    - ~/.ssh
+    - ~/.gnupg
+    - ~/.aws
+    - ~/.azure
+    - ~/.kube/config
+    - ~/.netrc
+    - ~/.git-credentials
+    - ~/.docker/config.json
+    - ~/.config/gh
+    - ~/.harness/config.yml
+    - ~/.harness/sessions.sqlite3
+    - ~/.harness/secrets
+  # File names that are denied wherever they appear.
+  deny_names:
+    - .env
+    - id_rsa
+    - id_ed25519
+    - credentials.json
+    - secrets.yml
+    - secrets.yaml
+
+skills:
+  # Extra directories to load skills from, in addition to the built-in ones and
+  # ~/.harness/skills. Each .py file there defines one skill.
+  extra_dirs: []
+  disabled: []                  # skill names to hide from the model
+  default_timeout_s: 60
+  # Per-skill timeout overrides, e.g. {terminal: 600, web_search: 45}
+  timeouts:
+    terminal: 300
+    background_command: 10
+    web_fetch: 90
+    web_search: 60
+    get_url_raw: 60
+    pdf_read: 60
+  # Maximum characters of a skill result sent to the model (full text always goes to the log).
+  max_result_chars: 30000
+
+terminal:
+  linux_shell: /bin/bash
+  windows_shell: powershell.exe
+  scrollback_lines: 10000
+  font_family: monospace
+  font_size: 12
+
+handoff:
+  # Command templates. {path} and {line} are substituted. {line} may be 0.
+  editor: "code --goto {path}:{line}"
+  # Leave null to use the platform default (xdg-open / explorer / open).
+  file_manager: null
+
+logging:
+  dir: ~/.harness/logs
+  rollover_mb: 500
+  backups: 3
+  levels:
+    internal: INFO              # harness code
+    prompts: INFO               # every prompt and response
+    audit: INFO                 # every skill call and approval decision
+  console: false                # also echo internal logs to stderr
+
+sessions:
+  db_path: ~/.harness/sessions.sqlite3
+  # Starting working directory for new sessions. null = your home directory.
+  default_cwd: null
+
+prompt:
+  # The instructions the model gets at the start of every session. The harness
+  # appends the skill list and the security rules (Get URL needs approval,
+  # prefer dedicated skills over the terminal) automatically.
+  startup: |
+    You are the agent inside a personal AI harness running on the user's own
+    computer. You act through the skills you are given. Be direct and concise.
+    Every result you produce can be handed to the user, so tell them when a
+    handoff would help (for example, opening the terminal or a file).
+
+ui:
+  window_title: AI Harness
+  theme:
+    # Lizard green on slate grey.
+    background: "#2b3137"
+    surface: "#343b42"
+    surface_alt: "#3d454d"
+    border: "#4a535c"
+    text: "#e6e9ec"
+    text_muted: "#a3adb7"
+    accent: "#7cb342"
+    accent_hover: "#93c95a"      # selected item under the mouse
+    accent_text: "#101409"
+    user_bubble: "#3a4a3a"
+    assistant_bubble: "#343b42"
+    warning: "#e0a030"
+    error: "#d9534f"
+    code_background: "#20252a"
+  font_family: null             # null = system default
+  font_size: 11
+  # Default panel sizes in pixels.
+  panels:
+    dock_width: 64
+    side_panel_width: 520
+    right_column_width: 320
+    explorer_height: 400
+    window_width: 1500
+    window_height: 950
+  file_explorer_root: "~"         # initial root; the explorer follows the session working directory
