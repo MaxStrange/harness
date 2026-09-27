@@ -15,8 +15,8 @@ Milestones 1 and 2 are implemented, plus most of milestone 3's skills:
 - Model bring-up: streaming, native or text tool calling, stop, automatic and manual compaction,
   offline status without losing sessions.
 - All twenty skills from the requirements, each with its handoff, plus `kicad_inspect` (schematic
-  hierarchy, BOM, board, nets straight from KiCad files) and `harness_settings` (ask the model to
-  change the sprite).
+  hierarchy, BOM, board, nets straight from KiCad files), `directory_tree` (a tree a few levels
+  deep with big folders summarized) and `harness_settings` (ask the model to change the sprite).
 - Security: command approval with summarizer, protected paths, private-network blocking, web reader
   in front of all web content, untrusted locations, raw URL gate.
 - Logging (three rolling channels), single YAML config with commented defaults, SQLite sessions.
@@ -68,6 +68,12 @@ pytest tests/stack -v -s     # the full stack tests: streaming, tool calling, co
                              # summarizer, web reader injection resistance, SearXNG JSON API
 ```
 
+## Icon and desktop entry
+
+The window and tray icon is the lizard. Windows uses it in the taskbar directly. On Linux, run
+`harness --install-desktop-entry` once to write a `.desktop` file and icon under `~/.local/share`
+so launchers and the taskbar show the lizard instead of a generic icon.
+
 ## The critter
 
 The sprite above the message box animates while the model works. Pick another one under
@@ -87,6 +93,9 @@ Two places to tell the model things it should always know:
   project; double-click a project header to edit it; right-click a session to move it.
 
 Both are injected into the system prompt, so a change applies to the next message.
+
+The sessions panel groups sessions under collapsible project headers. Search covers every session;
+**Advanced** adds filters by project, speaker and age, plus regex and case-sensitive matching.
 
 ## Resetting
 

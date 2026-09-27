@@ -27,8 +27,18 @@ def run(config_path: Path | None = None) -> int:
     from harness.ui.theme import build_stylesheet
 
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+    if sys.platform == "win32":
+        # Without its own application id Windows files the window under python.exe and shows
+        # the Python icon in the taskbar instead of the window icon.
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("MaxStrange.AIHarness")
+        except (AttributeError, OSError):  # pragma: no cover
+            pass
     app = QApplication(sys.argv[:1])
     app.setApplicationName("ai-harness")
+    app.setDesktopFileName("ai-harness")
     paths = HarnessPaths()
     try:
         config = load_config(paths, config_path)
@@ -39,6 +49,9 @@ def run(config_path: Path | None = None) -> int:
     setup_logging(config.logging)
     log.info("harness starting; config %s", config_path or paths.config_file)
     app.setStyleSheet(build_stylesheet(config.ui))
+    from harness.ui.main_window import make_app_icon
+
+    app.setWindowIcon(make_app_icon(config.ui.theme))
 
     window_holder: dict = {}
     ui_bridge = QtUiBridge(

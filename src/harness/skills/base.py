@@ -31,7 +31,7 @@ HandoffKind = Literal["external", "embedded", "done"]
 # External actions the UI knows how to perform.
 EXTERNAL_ACTIONS = ("editor", "file_manager", "browser", "default_app")
 # Embedded views the UI provides (UI5). Adding a view means adding it here and in the UI.
-EMBEDDED_VIEWS = ("terminal", "image", "tasks")
+EMBEDDED_VIEWS = ("terminal", "image", "tasks", "explorer")
 
 
 @dataclass
@@ -85,6 +85,11 @@ class Handoff:
     @classmethod
     def tasks(cls, label: str = "Show task list") -> Handoff:
         return cls("embedded", "tasks", label)
+
+    @classmethod
+    def explorer(cls, path: str | Path, label: str = "Show in explorer") -> Handoff:
+        """Jump the file explorer to ``path``."""
+        return cls("embedded", "explorer", label, target=str(path))
 
     @classmethod
     def done(cls, label: str) -> Handoff:

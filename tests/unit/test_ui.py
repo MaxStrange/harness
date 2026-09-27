@@ -87,7 +87,7 @@ def test_window_streams_reply_and_lists_session(qtbot, window):
     assert "there" in texts
     assert not win.controller.busy
     assert core.store.get_session(win.agent.session.id).title == "hi"
-    assert win.sessions.list.count() == 1
+    assert win.sessions.tree.topLevelItemCount() == 1
 
 
 def test_window_skill_call_shows_bubble_and_handoff_button(qtbot, window, tmp_path):
@@ -189,9 +189,10 @@ def test_session_switching_and_search(qtbot, window):
     second = win.agent.session.id
     win.send_message("tell me about pandas")
     wait_turn(qtbot, win)
-    assert first != second and win.sessions.list.count() == 2
+    assert first != second and win.sessions.tree.topLevelItemCount() == 2
     win.sessions.search.setText("lizards")
-    assert win.sessions.list.count() == 1 and win.sessions.list.item(0).data(0x0100) == first
+    tree = win.sessions.tree
+    assert tree.topLevelItemCount() == 1 and tree.topLevelItem(0).data(0, 0x0100) == first
     win.open_session(first)
     assert win.agent.session.id == first
     from harness.ui.chat.message_widget import AssistantBubble, UserBubble
@@ -240,25 +241,25 @@ def test_sessions_panel_click_keeps_items_and_rename_delegate(qtbot, window):
     win.new_session()
     second = win.agent.session.id
     panel = win.sessions
-    assert panel.list.currentItem().data(0x0100) == second
+    assert panel.tree.currentItem().data(0, 0x0100) == second
     item = panel._find(first)
-    panel.list.itemClicked.emit(item)  # a click on the other session opens it ...
+    panel.tree.itemClicked.emit(item, 0)  # a click on the other session opens it ...
     assert win.agent.session.id == first
     assert panel._find(first) is item  # ... without rebuilding the list
-    assert panel.list.currentItem() is item
+    assert panel.tree.currentItem() is item
     # Inline rename through the delegate.
     from PySide6.QtWidgets import QLineEdit
 
-    delegate = panel.list.itemDelegate()
-    index = panel.list.indexFromItem(item)
-    editor = delegate.createEditor(panel.list, None, index)
+    delegate = panel.tree.itemDelegate()
+    index = panel.tree.indexFromItem(item)
+    editor = delegate.createEditor(panel.tree, None, index)
     delegate.setEditorData(editor, index)
     assert isinstance(editor, QLineEdit) and editor.text() == "first session"
     editor.setText("Renamed")
-    delegate.setModelData(editor, panel.list.model(), index)
+    delegate.setModelData(editor, panel.tree.model(), index)
     assert core.store.get_session(first).title == "Renamed"
-    assert panel._find(first).data(0x0101) == "Renamed"
-    assert panel.list.currentItem().data(0x0100) == first
+    assert panel._find(first).data(0, 0x0101) == "Renamed"
+    assert panel.tree.currentItem().data(0, 0x0100) == first
 
 
 def test_set_cwd_moves_explorer(qtbot, window, tmp_path):
@@ -401,24 +402,49 @@ def test_projects_in_sessions_panel(qtbot, window, tmp_path):
     assert win.agent.session.project_id == project.id
     assert "Thesis" in win.windowTitle()
     assert "Cite properly." in win.agent.session.messages[0].content
-    kinds = [
-        (win.sessions.list.item(i).data(0x0102), win.sessions.list.item(i).text().split("\n")[0])
-        for i in range(win.sessions.list.count())
-    ]
-    assert kinds[0] == ("project", "Thesis  (1)")
-    assert kinds[1][0] == "session"
+    tree = win.sessions.tree
+    header = tree.topLevelItem(0)
+    assert header.data(0, 0x0102) == "project" and header.text(0) == "Thesis  (1)"
+    assert header.childCount() == 1 and header.child(0).data(0, 0x0100) == first
+    assert header.isExpanded()
     win.new_session()  # New follows the current project
     assert win.agent.session.project_id == project.id
     assert win.agent.session.cwd == tmp_path
     win.move_session(win.agent.session.id, None)
     assert win.agent.session.project_id is None
     assert "Thesis" not in win.windowTitle()
-    headers = [
-        win.sessions.list.item(i).text()
-        for i in range(win.sessions.list.count())
-        if win.sessions.list.item(i).data(0x0102) == "project"
-    ]
+    headers = [tree.topLevelItem(i).text(0) for i in range(tree.topLevelItemCount())]
     assert headers == ["Thesis  (1)", "No project  (1)"]
+    # Folding a project survives a refresh.
+    tree.topLevelItem(0).setExpanded(False)
+    win.sessions.refresh()
+    assert not win.sessions.tree.topLevelItem(0).isExpanded()
+    # Advanced search: filter by project.
+    win.sessions.advanced_button.setChecked(True)
+    win.sessions.search.setText("first")
+    assert win.sessions.tree.topLevelItemCount() == 1
+    win.sessions.project_filter.setCurrentIndex(win.sessions.project_filter.findData(project.id))
+    assert win.sessions.tree.topLevelItemCount() == 1
+    win.sessions.project_filter.setCurrentIndex(win.sessions.project_filter.findData("__none__"))
+    assert (
+        win.sessions.tree.topLevelItemCount() == 0
+        and "No matches" in win.sessions.search_status.text()
+    )
+
+
+def test_new_project_from_a_session_moves_that_session(qtbot, window, monkeypatch):
+    win, model, core = window
+    other = core.store.create_session("/tmp", "other session")
+    win.sessions.refresh()
+    from harness.ui import main_window as mw
+
+    monkeypatch.setattr(mw.ProjectDialog, "exec", lambda self: mw.ProjectDialog.DialogCode.Accepted)
+    monkeypatch.setattr(mw.ProjectDialog, "values", lambda self: ("Fresh", "", ""))
+    win.sessions.new_project_requested.emit(other.id)
+    project = core.store.list_projects()[0]
+    assert project.name == "Fresh"
+    assert core.store.get_session(other.id).project_id == project.id
+    assert win.agent.session.project_id is None  # the open session was not touched
 
 
 def test_critter_menu_and_skill_change_the_sprite(qtbot, window, harness_home):

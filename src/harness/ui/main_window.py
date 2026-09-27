@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 
 from harness.agent.loop import Agent
 from harness.bootstrap import HarnessCore
-from harness.config import set_config_value
+from harness.config import ThemeConfig, set_config_value
 from harness.skills.base import ApprovalDecision, Handoff
 from harness.skills.runner import SkillOutcome
 from harness.terminal.session import TerminalSession
@@ -57,22 +57,29 @@ class _Relay(QObject):
     health = Signal(str, str, str)
 
 
-def make_app_icon(accent: str, text: str) -> QIcon:
-    pixmap = QPixmap(64, 64)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(QColor(accent))
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawRoundedRect(4, 4, 56, 56, 14, 14)
-    painter.setPen(QColor(text))
-    font = painter.font()
-    font.setPixelSize(36)
-    font.setBold(True)
-    painter.setFont(font)
-    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "H")
-    painter.end()
-    return QIcon(pixmap)
+def make_app_icon(theme: ThemeConfig) -> QIcon:
+    """The lizard on a rounded slate tile, drawn at several sizes for crisp taskbar icons."""
+    from harness.ui.critter import Palette, draw_lizard
+
+    icon = QIcon()
+    palette = Palette(theme)
+    for size in (16, 24, 32, 48, 64, 128, 256):
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor(theme.surface_alt))
+        painter.setPen(Qt.PenStyle.NoPen)
+        radius = size * 0.22
+        painter.drawRoundedRect(0, 0, size, size, radius, radius)
+        # The critter drawing is 64x44; scale it to sit in the middle of the tile.
+        scale = size / 64 * 0.92
+        painter.translate(size * 0.04, (size - 44 * scale) / 2)
+        painter.scale(scale, scale)
+        draw_lizard(painter, palette, 0.0, False, False)
+        painter.end()
+        icon.addPixmap(pixmap)
+    return icon
 
 
 class MainWindow(QMainWindow):
@@ -90,7 +97,7 @@ class MainWindow(QMainWindow):
         self.handoffs = HandoffExecutor(self.config.handoff)
         self.relay = _Relay()
         self.setWindowTitle(ui.window_title)
-        self.setWindowIcon(make_app_icon(self.theme.accent, self.theme.accent_text))
+        self.setWindowIcon(make_app_icon(self.theme))
         self.resize(ui.panels.window_width, ui.panels.window_height)
 
         # -- widgets -------------------------------------------------------
@@ -227,7 +234,7 @@ class MainWindow(QMainWindow):
         session_menu.addSeparator()
         session_menu.addAction(self._action("Global context...", self.edit_global_context))
         session_menu.addAction(self._action("Project context...", self.edit_current_project))
-        session_menu.addAction(self._action("New project...", self.new_project))
+        session_menu.addAction(self._action("New project...", lambda: self.new_project(None)))
         session_menu.addSeparator()
         session_menu.addAction(self._action("Compact older turns now", self.controller.compact))
         session_menu.addAction(self._action("Stop generation", self.controller.stop, "Escape"))
@@ -391,16 +398,25 @@ class MainWindow(QMainWindow):
 
     # -- projects and context ------------------------------------------------------
 
-    def new_project(self) -> None:
+    def new_project(self, for_session: str | None = None) -> None:
+        """Create a project. ``for_session`` (or, from the menu, the open session if it has no
+        project) is moved into it."""
         dialog = ProjectDialog(self, "New project", root_dir=self._session_cwd())
         if dialog.exec() != ProjectDialog.DialogCode.Accepted:
             return
         name, root_dir, instructions = dialog.values()
         project = self.core.store.create_project(name, root_dir, instructions)
-        if self.agent.session is not None and self.agent.session.project_id is None:
-            self.agent.set_project(project.id)  # the session you are in joins the new project
-        self.sessions.refresh()
-        self._session_opened(self.agent.session.id) if self.agent.session else None
+        target = for_session if isinstance(for_session, str) else None
+        if (
+            target is None
+            and self.agent.session is not None
+            and self.agent.session.project_id is None
+        ):
+            target = self.agent.session.id
+        if target is not None:
+            self.move_session(target, project.id)
+        else:
+            self.sessions.refresh()
         self.chat.add_notice(f"Project {name!r} created.")
 
     def edit_project(self, project_id: str) -> None:
@@ -577,6 +593,9 @@ class MainWindow(QMainWindow):
             self.show_view("image")
         elif handoff.action == "tasks":
             self.show_view("tasks")
+        elif handoff.action == "explorer":
+            if handoff.target:
+                self.explorer.reveal(handoff.target)
         else:
             self._on_status(f"Unknown embedded view {handoff.action!r}", True)
 

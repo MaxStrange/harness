@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from harness.agent.loop import Agent
 from harness.agent.prompts import build_system_prompt
 from harness.agent.store import SessionStore
@@ -96,4 +98,38 @@ def test_agent_uses_project_root_and_context_file(tmp_path, harness_home):
     agent.set_project(None)
     assert "## Project" not in session.messages[0].content
     assert store.get_session(session.id).project_id is None
+    store.close()
+
+
+def test_advanced_search_filters(tmp_path):
+    import time
+
+    store = SessionStore(tmp_path / "db.sqlite3")
+    thesis = store.create_project("Thesis", None, "")
+    a = store.create_session("/tmp", "in project", project_id=thesis.id)
+    b = store.create_session("/tmp", "loose")
+    from harness.model.types import Message
+
+    store.append_message(a.id, Message("user", "Lizard green looks Great"))
+    store.append_message(a.id, Message("assistant", "Agreed about the lizard."))
+    store.append_message(b.id, Message("user", "lizard tail question"))
+    from harness.agent.store import ANY_PROJECT
+
+    assert {h.session_id for h in store.search("lizard")} == {a.id, b.id}
+    assert {h.session_id for h in store.search("lizard", project_id=thesis.id)} == {a.id}
+    assert {h.session_id for h in store.search("lizard", project_id=None)} == {b.id}
+    assert {h.role for h in store.search("lizard", role="assistant")} == {"assistant"}
+    assert store.search("Great", case_sensitive=True) and not store.search(
+        "great", case_sensitive=True
+    )
+    hits = store.search(r"liz\w+ (green|tail)", regex=True)
+    assert (
+        {h.session_id for h in hits} == {a.id, b.id}
+        and "[Lizard green]" in hits[0].snippet
+        or "[lizard tail]" in hits[0].snippet
+    )
+    with pytest.raises(ValueError):
+        store.search("(unclosed", regex=True)
+    assert store.search("lizard", since=time.time() + 10) == []
+    assert store.search("lizard", project_id=ANY_PROJECT, since=time.time() - 10)
     store.close()

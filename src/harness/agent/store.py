@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -14,6 +15,9 @@ from pathlib import Path
 from harness.model.types import Message
 
 log = logging.getLogger(__name__)
+
+ANY_PROJECT = object()  # search(): no project filter
+SCAN_LIMIT = 20000  # messages scanned by a regex / case-sensitive search
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -357,33 +361,93 @@ class SessionStore:
 
     # -- search ------------------------------------------------------------
 
-    def search(self, query: str, limit: int = 50) -> list[SearchHit]:
+    def search(
+        self,
+        query: str,
+        limit: int = 50,
+        *,
+        project_id: str | None | object = ANY_PROJECT,
+        role: str | None = None,
+        regex: bool = False,
+        case_sensitive: bool = False,
+        since: float | None = None,
+    ) -> list[SearchHit]:
+        """Full-text search over user and assistant messages.
+
+        ``project_id`` narrows to one project (``None`` = sessions without a project,
+        the default ``ANY_PROJECT`` = everything); ``role`` to "user" or "assistant";
+        ``since`` is a timestamp. Plain queries use FTS5; ``regex`` and
+        ``case_sensitive`` searches scan the messages in Python instead.
+        """
         query = query.strip()
         if not query:
             return []
+        conditions = ["m.role IN ('user', 'assistant')"]
+        params: list = []
+        if project_id is not ANY_PROJECT:
+            if project_id is None:
+                conditions.append("s.project_id IS NULL")
+            else:
+                conditions.append("s.project_id = ?")
+                params.append(project_id)
+        if role in ("user", "assistant"):
+            conditions.append("m.role = ?")
+            params.append(role)
+        if since is not None:
+            conditions.append("m.created >= ?")
+            params.append(since)
+        where = " AND ".join(conditions)
         with self._lock:
-            if self.fts:
+            if not regex and not case_sensitive and self.fts:
                 try:
                     rows = self._conn.execute(
-                        "SELECT m.session_id, s.title, m.role, m.seq, snippet(messages_fts, 0, '[', ']', '...', 12) AS snip "
-                        "FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid JOIN sessions s ON s.id = m.session_id "
-                        "WHERE messages_fts MATCH ? AND m.role IN ('user', 'assistant') ORDER BY rank LIMIT ?",
-                        (_fts_query(query), limit),
+                        "SELECT m.session_id, s.title, m.role, m.seq, "
+                        "snippet(messages_fts, 0, '[', ']', '...', 12) AS snip "
+                        "FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid "
+                        "JOIN sessions s ON s.id = m.session_id "
+                        f"WHERE messages_fts MATCH ? AND {where} ORDER BY rank LIMIT ?",
+                        (_fts_query(query), *params, limit),
                     ).fetchall()
                     return [
                         SearchHit(r["session_id"], r["title"], r["snip"], r["role"], r["seq"])
                         for r in rows
                     ]
                 except sqlite3.OperationalError as exc:
-                    log.info("FTS query failed (%s); falling back to LIKE", exc)
+                    log.info("FTS query failed (%s); scanning instead", exc)
             rows = self._conn.execute(
-                "SELECT m.session_id, s.title, m.role, m.seq, substr(m.content, 1, 160) AS snip FROM messages m JOIN sessions s ON s.id = m.session_id "
-                "WHERE m.content LIKE ? AND m.role IN ('user', 'assistant') ORDER BY m.created DESC LIMIT ?",
-                (f"%{query}%", limit),
+                "SELECT m.session_id, s.title, m.role, m.seq, m.content FROM messages m "
+                f"JOIN sessions s ON s.id = m.session_id WHERE {where} "
+                "ORDER BY m.created DESC LIMIT ?",
+                (*params, SCAN_LIMIT),
             ).fetchall()
-        return [
-            SearchHit(r["session_id"], r["title"], r["snip"], r["role"], r["seq"]) for r in rows
-        ]
+        flags = 0 if case_sensitive else re.IGNORECASE
+        try:
+            pattern = re.compile(query if regex else re.escape(query), flags)
+        except re.error as exc:
+            raise ValueError(f"invalid regular expression: {exc}") from exc
+        hits: list[SearchHit] = []
+        for r in rows:
+            match = pattern.search(r["content"])
+            if match is None:
+                continue
+            hits.append(
+                SearchHit(
+                    r["session_id"], r["title"], _snippet(r["content"], match), r["role"], r["seq"]
+                )
+            )
+            if len(hits) >= limit:
+                break
+        return hits
+
+
+def _snippet(content: str, match: re.Match, context: int = 60) -> str:
+    start = max(0, match.start() - context)
+    end = min(len(content), match.end() + context)
+    text = content[start:end].replace("\n", " ")
+    marked = (
+        text[: match.start() - start] + "[" + match.group(0) + "]" + text[match.end() - start :]
+    )
+    return ("..." if start > 0 else "") + marked + ("..." if end < len(content) else "")
 
 
 def _fts_query(text: str) -> str:
