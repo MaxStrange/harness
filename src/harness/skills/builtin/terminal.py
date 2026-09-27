@@ -10,7 +10,7 @@ from harness.skills.base import (
     SkillError,
     SkillResult,
 )
-from harness.terminal.session import TerminalBusy
+from harness.terminal.session import TerminalBusy, shell_kind_for
 
 
 class TerminalSkill(Skill):
@@ -47,7 +47,7 @@ class TerminalSkill(Skill):
         if not command:
             return None  # opening the terminal is harmless
         cwd = args.get("cwd")
-        detail = command if not cwd else f"cd {_quote(ctx.resolve(cwd))} && {command}"
+        detail = command if not cwd else _in_dir(ctx.resolve(cwd), command, _shell_kind(ctx))
         return ApprovalRequest(
             self.name,
             "Run this command in the terminal?",
@@ -71,7 +71,7 @@ class TerminalSkill(Skill):
                 _cd(session, cwd, ctx)
             return SkillResult(f"Opened terminal session {session_name!r} in {cwd}.", handoff)
         if args.get("cwd"):
-            command = f"cd {_quote(cwd)} && {command}"
+            command = _in_dir(cwd, command, session.shell_kind)
         timeout = ctx.config.skills.timeout_for(self.name)
         try:
             result = session.run_command(command, timeout=timeout, cancel=ctx.cancel)
@@ -95,15 +95,35 @@ class TerminalSkill(Skill):
         )
 
 
-def _quote(path) -> str:
+def _shell_kind(ctx: SkillContext) -> str:
+    terminals = ctx.services.terminals
+    return shell_kind_for(terminals.shell_path) if terminals is not None else "bash"
+
+
+def _quote(path, shell_kind: str = "bash") -> str:
     text = str(path)
+    if shell_kind == "powershell":
+        return "'" + text.replace("'", "''") + "'"
     if all(ch.isalnum() or ch in "/_-.~:\\" for ch in text):
         return text
     return "'" + text.replace("'", "'\\''") + "'"
 
 
+def _cd_command(path, shell_kind: str) -> str:
+    if shell_kind == "powershell":
+        return f"Set-Location -LiteralPath {_quote(path, shell_kind)}"
+    return f"cd {_quote(path)}"
+
+
+def _in_dir(path, command: str, shell_kind: str) -> str:
+    """``command`` runs only if changing to ``path`` worked (Windows PowerShell 5.1 has no &&)."""
+    if shell_kind == "powershell":
+        return f"{_cd_command(path, shell_kind)}; if ($?) {{ {command} }}"
+    return f"{_cd_command(path, shell_kind)} && {command}"
+
+
 def _cd(session, cwd, ctx) -> None:
     try:
-        session.run_command(f"cd {_quote(cwd)}", timeout=10, cancel=ctx.cancel)
+        session.run_command(_cd_command(cwd, session.shell_kind), timeout=10, cancel=ctx.cancel)
     except TerminalBusy:
         pass

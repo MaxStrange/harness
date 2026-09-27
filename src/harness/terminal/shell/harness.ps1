@@ -2,6 +2,17 @@
 # has already run. Two hooks bracket every command with invisible markers
 # (OSC 7331): PSConsoleHostReadLine fires after a command line is read and before
 # it runs, and prompt fires before the next prompt, carrying the exit code.
+
+# The ConPTY child starts with Ctrl+C ignored (the flag is inherited from pywinpty's
+# process), so a typed ^C would never stop a running command. Clear the flag; child
+# processes inherit the cleared state.
+try {
+    Add-Type -Namespace HarnessNative -Name Console -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern bool SetConsoleCtrlHandler(System.IntPtr handler, bool add);
+'@
+    [void][HarnessNative.Console]::SetConsoleCtrlHandler([System.IntPtr]::Zero, $false)
+} catch { }
+
 $global:__harnessEsc = [char]27
 $global:__harnessBel = [char]7
 

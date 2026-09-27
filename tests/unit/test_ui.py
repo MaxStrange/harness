@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -262,7 +263,7 @@ def test_set_cwd_moves_explorer(qtbot, window, tmp_path):
     sub = tmp_path / "elsewhere"
     sub.mkdir()
     win.set_cwd(str(sub))
-    assert win.explorer.model.rootPath() == str(sub)
+    assert Path(win.explorer.model.rootPath()) == sub
     assert win.cwd_label.text() == str(sub)
 
 

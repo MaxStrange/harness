@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import shutil
 import sys
 
@@ -7,11 +8,20 @@ import pytest
 
 from harness.config import TerminalConfig
 from harness.terminal.manager import BackgroundJobs, TerminalManager
-from harness.terminal.markers import MarkerParser, split_segments, wrap_for_bash
+from harness.terminal.markers import (
+    MarkerParser,
+    split_segments,
+    strip_escapes,
+    wrap_for_bash,
+    wrap_for_powershell,
+)
 from harness.terminal.session import TerminalBusy, TerminalSession
 
 bash_only = pytest.mark.skipif(
     sys.platform == "win32" or not shutil.which("bash"), reason="needs bash"
+)
+powershell_only = pytest.mark.skipif(
+    sys.platform != "win32" or not shutil.which("powershell.exe"), reason="needs Windows PowerShell"
 )
 
 
@@ -138,3 +148,70 @@ def test_manager_and_background_jobs(tmp_path):
         assert manager.get_or_create("main", str(tmp_path)) is main
     finally:
         manager.close_all()
+
+
+def test_wrap_for_powershell_multiline_is_one_line():
+    assert wrap_for_powershell("Get-Date\n") == "Get-Date"
+    body = "$y = @'\nit's\n'@\n$y"
+    wrapped = wrap_for_powershell(body)
+    assert "\n" not in wrapped and wrapped.startswith("Invoke-Expression ")
+    encoded = wrapped.split("'")[1]
+    assert base64.b64decode(encoded).decode("utf-8") == body
+
+
+def test_strip_escapes_removes_colours_titles_and_cursor_moves():
+    title = "\x1b]0;C:\\ps.exe\x1b\\"  # OSC window title, ST-terminated, as ConPTY sends it
+    text = f"\x1b[?7l\x1b[?7h{title}\x1b[0;91mError\x1b[0m\x1b[16;63H\x1b=done\x1b(B"
+    assert strip_escapes(text) == "Errordone"
+
+
+@powershell_only
+def test_real_powershell_session_captures_output_and_exit_code(tmp_path):
+    session = TerminalSession("t", "powershell.exe", str(tmp_path))
+    received = []
+    session.subscribe(received.append)
+    session.start()
+    try:
+        assert session.wait_for_prompt(30)
+        assert session.run_command("echo hello", timeout=20).output == "hello"
+        # Native exit codes and cmdlet failures.
+        assert session.run_command("cmd /c exit 3", timeout=20).exit_code == 3
+        failed = session.run_command("Get-Item no_such_item", timeout=20)
+        assert failed.exit_code == 1 and "\x1b" not in failed.output
+        # Multi-line commands (here-strings, blocks) run as one unit and share scope (P10).
+        multi = session.run_command("$y = @'\nit's here\n'@\nif ($true) {\n  $y\n}", timeout=20)
+        assert multi.output == "it's here" and multi.exit_code == 0
+        assert session.run_command("$y.Length", timeout=20).output == "9"
+        (tmp_path / "sub").mkdir()
+        session.run_command("cd sub", timeout=20)
+        assert session.run_command("(Get-Location).Path", timeout=20).output.endswith("sub")
+        assert session.run_command("Write-Output 'h\u00e9llo \u2713'", timeout=20).output == (
+            "h\u00e9llo \u2713"
+        )
+        assert b"7331" not in b"".join(received)
+    finally:
+        session.close()
+
+
+@powershell_only
+def test_real_powershell_timeout_interrupts(tmp_path):
+    session = TerminalSession("t", "powershell.exe", str(tmp_path))
+    session.start()
+    try:
+        assert session.wait_for_prompt(30)
+        result = session.run_command("Start-Sleep 30", timeout=1)
+        assert result.timed_out
+        assert session.wait_for_prompt(10)
+        assert session.run_command("echo back", timeout=20).output == "back"
+    finally:
+        session.close()
+
+
+def test_terminal_skill_changes_directory_per_shell():
+    from harness.skills.builtin.terminal import _in_dir
+
+    assert _in_dir("/tmp/a b", "ls", "bash") == "cd '/tmp/a b' && ls"
+    # Windows PowerShell 5.1 has no &&, and doubles single quotes.
+    assert _in_dir(r"C:\it's", "dir", "powershell") == (
+        r"Set-Location -LiteralPath 'C:\it''s'; if ($?) { dir }"
+    )

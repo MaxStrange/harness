@@ -8,6 +8,7 @@ which would ignore them anyway) and reports them as events.
 
 from __future__ import annotations
 
+import base64
 import re
 from dataclasses import dataclass
 
@@ -119,7 +120,29 @@ def wrap_for_bash(command: str) -> str:
 
 
 def wrap_for_powershell(command: str) -> str:
+    """A multi-line command becomes one line: PSReadLine mangles typed here-strings.
+
+    The body travels as base64 so no quoting or newline reaches the line editor;
+    ``Invoke-Expression`` runs it in the shared scope, as P10 wants.
+    """
     if "\n" not in command.strip():
         return command.strip()
-    body = command.strip("\n").replace("'", "''")
-    return f"Invoke-Expression @'\n{body}\n'@"
+    body = base64.b64encode(command.strip("\n").encode("utf-8")).decode("ascii")
+    return (
+        "Invoke-Expression ([Text.Encoding]::UTF8.GetString("
+        f"[Convert]::FromBase64String('{body}')))"
+    )
+
+
+_ESCAPE_RE = re.compile(
+    r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC ... BEL / ST (window titles, hyperlinks)
+    r"|\x1b\[[0-?]*[ -/]*[@-~]"  # CSI (colours, cursor movement, modes)
+    r"|\x1b[PX^_][^\x1b]*\x1b\\"  # DCS / SOS / PM / APC strings
+    r"|\x1b[()][0-9A-Za-z]"  # character set selection
+    r"|\x1b[0-?@-Z\\-_]"  # two-character escapes (keypad modes, save cursor, ...)
+)
+
+
+def strip_escapes(text: str) -> str:
+    """Terminal control sequences removed, for output handed to the model."""
+    return _ESCAPE_RE.sub("", text)

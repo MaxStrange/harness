@@ -19,7 +19,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from harness.model.types import CancelToken
-from harness.terminal.markers import MarkerParser, wrap_for_bash, wrap_for_powershell
+from harness.terminal.markers import (
+    MarkerParser,
+    strip_escapes,
+    wrap_for_bash,
+    wrap_for_powershell,
+)
 from harness.terminal.pty_base import PtyProcess
 
 log = logging.getLogger(__name__)
@@ -274,9 +279,8 @@ class TerminalSession:
                 with self._cond:
                     self._pending = False
                     self._capturing = False
-            text = (
-                output.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
-            )
+            text = strip_escapes(output.decode("utf-8", errors="replace"))
+            text = text.replace("\r\n", "\n").replace("\r", "\n")
             return CommandResult(
                 text.strip("\n"), exit_code, timed_out=timed_out, cancelled=cancelled
             )
