@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-harness"
+version = "0.1.0"
+description = "Personal AI harness v2: a Qt desktop app through which a local LLM acts as an agent on this machine."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.6",
+    "PyYAML>=6.0",
+    "pydantic>=2.5",
+    "httpx>=0.25",
+    "markdown-it-py>=3.0",
+    "Pygments>=2.16",
+    "pypdf>=4.0",
+    "psutil>=5.9",
+    "pywinpty>=2.0; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-qt>=4.2",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+harness = "harness.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+harness = ["default_config.yml", "terminal/web/*", "terminal/shell/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+qt_api = "pyside6"
+markers = [
+    "stack: tests that talk to the real model stack described in ~/.harness/config.yml",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]

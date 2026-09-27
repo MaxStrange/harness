@@ -1,2 +1,86 @@
-# harness
-Custom AI harness
+# AI Harness v2
+
+A personal desktop harness (Python + Qt) through which a local LLM acts as an agent on
+this machine, and through which you can pick up and continue any work the model starts.
+The requirements are in [docs/requirements.md](docs/requirements.md); the design in
+[docs/architecture.md](docs/architecture.md); how to add a skill in [docs/skills.md](docs/skills.md).
+
+## Status
+
+Milestones 1 and 2 are implemented, plus most of milestone 3's skills:
+
+- Layout: viewer dock (far left, magnifying), embedded side panel (terminal / image viewer / task
+  list), central chat with Markdown and syntax highlighting, file explorer (standard tree for now)
+  and sessions panel with full-text search.
+- Model bring-up: streaming, native or text tool calling, stop, automatic and manual compaction,
+  offline status without losing sessions.
+- All twenty skills from the requirements, each with its handoff.
+- Security: command approval with summarizer, protected paths, private-network blocking, web reader
+  in front of all web content, untrusted locations, raw URL gate.
+- Logging (three rolling channels), single YAML config with commented defaults, SQLite sessions.
+
+Not yet done: the orbiting file explorer (UI3), dock polish, and anything that needs a real screen or
+the real model stack (see "Untested" below).
+
+## Install
+
+Python 3.11+.
+
+```bash
+pip install -e ".[dev]"      # from a clone; the dev extra adds pytest, pytest-qt, ruff
+harness                      # launches the GUI
+```
+
+On Windows, `pywinpty` is installed automatically for the embedded PowerShell terminal.
+VS Code (`code` on PATH) is the default editor for handoffs; change `handoff.editor` in the config.
+
+First launch writes a commented default config to `~/.harness/config.yml` and creates
+`~/.harness/logs/`, `~/.harness/skills/` (drop-in skills) and `~/.harness/downloads/`
+(an untrusted location). Set `HARNESS_HOME` to use a different folder.
+
+## Model servers
+
+The main model is served by llama.cpp's server with tool calling enabled, for example:
+
+```bash
+llama-server -m main-model.gguf --host 0.0.0.0 --port 8080 --jinja -c 32768
+llama-server -m small-model.gguf --host 0.0.0.0 --port 8082      # summarizer
+llama-server -m reader-model.gguf --host 0.0.0.0 --port 8083                 # web reader
+```
+
+Point `models.main`, `models.summarizer` and `models.web_reader` in the config at them. Each role
+takes a list of endpoints tried in order, so the summarizer can run on this machine first and fall
+back to the LLM machine (M2), and one server can fill several roles while you experiment (M5).
+
+## Checking the stack
+
+```bash
+harness --check-config       # validates the config, naming any bad setting
+harness --stack-check        # are the servers and SearXNG reachable?
+pytest tests/stack -v -s     # the full stack tests: streaming, tool calling, context size,
+                             # summarizer, web reader injection resistance, SearXNG JSON API
+```
+
+## Tests
+
+```bash
+pytest                       # unit tests with a fake model; no servers, no screen needed
+ruff check src tests && ruff format --check src tests
+```
+
+The unit tests cover the config, logging, model client (against a mock server), security policies,
+web fetching, the skill framework and every built-in skill, the terminal capture (against a real
+bash), the session store and the agent loop, and the Qt widgets offscreen.
+
+## Untested
+
+This code was written without a display or the model stack, so the following need a real run:
+
+- The look of the window on a real screen (only offscreen screenshots so far), the dock's
+  magnification feel, splitter defaults.
+- The xterm.js terminal inside QtWebEngine (the Python side and the marker capture are tested; the
+  JavaScript page and QWebChannel wiring are not).
+- Windows: PowerShell hooks in `src/harness/terminal/shell/harness.ps1`, pywinpty, `explorer`
+  handoffs.
+- Tool calling and streaming quirks of the actual llama.cpp build and models.
+- Desktop notifications and the system tray on the user's desktop environment.
