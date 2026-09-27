@@ -48,6 +48,7 @@ class _Relay(QObject):
     """Worker-thread callbacks hop onto the GUI thread through these queued signals."""
 
     terminal_created = Signal(object)
+    terminal_exited = Signal(object)
     tasks_changed = Signal(str, object)
     health = Signal(str, str, str)
 
@@ -128,6 +129,7 @@ class MainWindow(QMainWindow):
         self.sessions.new_requested.connect(self.new_session)
         self.sessions.open_requested.connect(self.open_session)
         self.sessions.delete_requested.connect(self.delete_session)
+        self.sessions.rename_requested.connect(self.rename_session_to)
         right = QSplitter(Qt.Orientation.Vertical)
         right.addWidget(self.explorer)
         right.addWidget(self.sessions)
@@ -252,6 +254,11 @@ class MainWindow(QMainWindow):
 
         self.relay.terminal_created.connect(self._on_terminal_created)
         self.core.terminals.on_created.append(self.relay.terminal_created.emit)
+        self.relay.terminal_exited.connect(self._on_terminal_exited)
+        self.core.terminals.on_exited.append(self.relay.terminal_exited.emit)
+        self.terminal_panel.new_requested.connect(self.new_terminal)
+        self.terminal_panel.restart_requested.connect(self.restart_terminal)
+        self.terminal_panel.close_requested.connect(self.close_terminal)
         self.relay.tasks_changed.connect(self.task_view.on_store_changed)
         self.core.task_lists.listeners.append(self.relay.tasks_changed.emit)
         self.relay.health.connect(self._on_health)
@@ -287,6 +294,7 @@ class MainWindow(QMainWindow):
         self.task_view.set_session(session_id)
         self.sessions.set_current(session_id)
         self.cwd_label.setText(str(self.agent.session.cwd))
+        self.explorer.set_root(str(self.agent.session.cwd))
         self.composer.input.setFocus()
 
     def delete_session(self, session_id: str) -> None:
@@ -313,8 +321,13 @@ class MainWindow(QMainWindow):
             self, "Rename session", "Title:", text=record.title if record else ""
         )
         if ok and title.strip():
-            self.core.store.rename_session(self.agent.session.id, title.strip())
-            self.sessions.refresh()
+            self.rename_session_to(self.agent.session.id, title.strip())
+
+    def rename_session_to(self, session_id: str, title: str) -> None:
+        title = title.strip()
+        if title:
+            self.core.store.rename_session(session_id, title)
+        self.sessions.refresh()
 
     def choose_cwd(self) -> None:
         if self.agent.session is None:
@@ -330,6 +343,7 @@ class MainWindow(QMainWindow):
             return
         self.agent.set_cwd(Path(path))
         self.cwd_label.setText(path)
+        self.explorer.set_root(path)
         self.chat.add_notice(f"Working directory: {path}")
 
     # -- chat ---------------------------------------------------------------------
@@ -407,13 +421,8 @@ class MainWindow(QMainWindow):
         view = self._views.get(name)
         if view is None:
             return
-        if (
-            name == "terminal"
-            and not self.terminal_panel.names()
-            and self.agent.session is not None
-        ):
-            session = self.core.terminals.get_or_create("main", str(self.agent.session.cwd))
-            self.terminal_panel.add_session(session)
+        if name == "terminal" and not self.terminal_panel.alive_names():
+            self.restart_terminal(self.terminal_panel.current_name() or "main")
         self.side_panel.setCurrentWidget(view)
         self.side_panel.setVisible(True)
         self.dock.set_active(name)
@@ -432,9 +441,35 @@ class MainWindow(QMainWindow):
         self.side_panel.setVisible(False)
         self.dock.set_active(None)
 
+    def _session_cwd(self) -> str:
+        return str(self.agent.session.cwd) if self.agent.session else str(Path.home())
+
     def _on_terminal_created(self, session: TerminalSession) -> None:
         self.terminal_panel.add_session(session)
-        self.dock.set_badge("terminal", len(self.terminal_panel.names()))
+        self.dock.set_badge("terminal", len(self.terminal_panel.alive_names()))
+
+    def _on_terminal_exited(self, session: TerminalSession) -> None:
+        self.terminal_panel.mark_exited(session.name)
+        self.dock.set_badge("terminal", len(self.terminal_panel.alive_names()))
+
+    def new_terminal(self) -> None:
+        name = self.core.terminals.next_name()
+        session = self.core.terminals.get_or_create(name, self._session_cwd())
+        self.terminal_panel.add_session(session)
+        self.show_view("terminal")
+        self.terminal_panel.show_session(name)
+
+    def restart_terminal(self, name: str) -> None:
+        """Start a fresh shell under ``name`` (the manager replaces a dead session)."""
+        session = self.core.terminals.get_or_create(name, self._session_cwd())
+        self.terminal_panel.add_session(session)
+        self.terminal_panel.show_session(name)
+        self.dock.set_badge("terminal", len(self.terminal_panel.alive_names()))
+
+    def close_terminal(self, name: str) -> None:
+        self.core.terminals.close(name)
+        self.terminal_panel.remove_session(name)
+        self.dock.set_badge("terminal", len(self.terminal_panel.alive_names()))
 
     # -- notifications and health -----------------------------------------------------
 

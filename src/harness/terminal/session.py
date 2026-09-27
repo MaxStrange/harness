@@ -106,6 +106,8 @@ class TerminalSession:
         self._last_exit: int | None = None
         self._command_lock = threading.Lock()
         self.closed = False
+        # Called (on the reader thread) once the shell process has gone away.
+        self.on_exit: list[Callable[[TerminalSession], None]] = []
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -187,6 +189,11 @@ class TerminalSession:
             self._at_prompt = False
             self._cond.notify_all()
         self._broadcast(b"\r\n[process exited]\r\n")
+        for callback in list(self.on_exit):
+            try:
+                callback(self)
+            except Exception:  # noqa: BLE001
+                log.exception("terminal on_exit callback failed")
 
     def _handle_marker(self, kind: str, exit_code: int | None) -> None:
         if kind == "S":

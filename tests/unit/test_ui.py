@@ -196,7 +196,7 @@ def test_session_switching_and_search(qtbot, window):
     assert "lizards" in win.chat._container.findChildren(AssistantBubble)[0].text
 
 
-def test_dock_magnifies_and_clicks(qtbot):
+def test_dock_is_centred_and_magnifies_along_an_arc(qtbot):
     from PySide6.QtCore import QPointF
 
     dock = Dock(Config().ui.theme)
@@ -204,15 +204,66 @@ def test_dock_magnifies_and_clicks(qtbot):
     dock.resize(64, 400)
     for name in ("terminal", "image", "tasks"):
         dock.add_item(name, name, "x")
-    rects = dock._rects()
-    dock._mouse_y = rects[0].center().y()
+    resting = dock._rects()
+    # Vertically centred: the strip's middle is the widget's middle.
+    middle = (resting[0].top() + resting[-1].bottom()) / 2
+    assert middle == pytest.approx(200, abs=1)
+    assert all(r.width() == 36 for r in resting)
+    # Hover the first icon: it grows, slides right (the arc), and the far icon stays put.
+    dock._mouse_y = resting[0].center().y()
+    dock._target_intensity = 1.0
+    dock.settle()
     magnified = dock._rects()
-    assert magnified[0].width() > rects[0].width() and magnified[2].width() == pytest.approx(
-        rects[2].width(), abs=1
-    )
+    assert magnified[0].width() > resting[0].width()
+    assert magnified[0].center().x() > resting[0].center().x()
+    assert magnified[2].width() == pytest.approx(resting[2].width(), abs=1)
+    assert magnified[0].right() <= dock.width()
+    assert dock.item_at(QPointF(magnified[0].center())).name == "terminal"
     clicked = []
     dock.item_clicked.connect(clicked.append)
-    assert dock.item_at(QPointF(magnified[1].center())).name == "image"
+    # Leaving eases back to rest.
+    dock.leaveEvent(None)
+    dock.settle()
+    assert dock._rects()[0].width() == pytest.approx(36)
+
+
+def test_sessions_panel_click_keeps_items_and_rename_delegate(qtbot, window):
+    win, model, core = window
+    model.script += ["one", "two"]
+    win.send_message("first session")
+    wait_turn(qtbot, win)
+    first = win.agent.session.id
+    win.new_session()
+    second = win.agent.session.id
+    panel = win.sessions
+    assert panel.list.currentItem().data(0x0100) == second
+    item = panel._find(first)
+    panel.list.itemClicked.emit(item)  # a click on the other session opens it ...
+    assert win.agent.session.id == first
+    assert panel._find(first) is item  # ... without rebuilding the list
+    assert panel.list.currentItem() is item
+    # Inline rename through the delegate.
+    from PySide6.QtWidgets import QLineEdit
+
+    delegate = panel.list.itemDelegate()
+    index = panel.list.indexFromItem(item)
+    editor = delegate.createEditor(panel.list, None, index)
+    delegate.setEditorData(editor, index)
+    assert isinstance(editor, QLineEdit) and editor.text() == "first session"
+    editor.setText("Renamed")
+    delegate.setModelData(editor, panel.list.model(), index)
+    assert core.store.get_session(first).title == "Renamed"
+    assert panel._find(first).data(0x0101) == "Renamed"
+    assert panel.list.currentItem().data(0x0100) == first
+
+
+def test_set_cwd_moves_explorer(qtbot, window, tmp_path):
+    win, model, core = window
+    sub = tmp_path / "elsewhere"
+    sub.mkdir()
+    win.set_cwd(str(sub))
+    assert win.explorer.model.rootPath() == str(sub)
+    assert win.cwd_label.text() == str(sub)
 
 
 def test_views_toggle_and_image_viewer(qtbot, window, tmp_path):
@@ -307,3 +358,29 @@ def test_terminal_handoff_opens_view(qtbot, window, tmp_path):
     wait_turn(qtbot, win, timeout=20000)
     qtbot.waitUntil(lambda: "main" in win.terminal_panel.names(), timeout=10000)
     assert win.dock.active == "terminal" and win.side_panel.isVisibleTo(win)
+
+
+@bash_only
+def test_terminal_exit_marks_tab_and_restart_and_plus(qtbot, window, tmp_path):
+    win, model, core = window
+    win.show_view("terminal")
+    qtbot.waitUntil(lambda: "main" in win.terminal_panel.alive_names(), timeout=10000)
+    session = core.terminals.get("main")
+    assert session.wait_for_prompt(10)
+    session.write("exit\n")
+    qtbot.waitUntil(lambda: win.terminal_panel._views["main"].exited, timeout=10000)
+    assert win.terminal_panel.alive_names() == []
+    assert "exited" in win.terminal_panel.tabs.tabText(0)
+    assert win.terminal_panel._views["main"].exit_bar.isVisibleTo(win.terminal_panel)
+    # Clicking the dock again gives a fresh shell under the same name.
+    win.show_view("terminal")
+    qtbot.waitUntil(lambda: "main" in win.terminal_panel.alive_names(), timeout=10000)
+    assert core.terminals.get("main") is not session and core.terminals.get("main").alive
+    assert win.terminal_panel.tabs.tabText(0) == "main"
+    # The "+" button opens a second terminal in a new tab.
+    win.terminal_panel.new_button.click()
+    qtbot.waitUntil(lambda: "term-2" in win.terminal_panel.alive_names(), timeout=10000)
+    assert win.terminal_panel.tabs.count() == 2 and win.terminal_panel.current_name() == "term-2"
+    win.terminal_panel.tabs.tabCloseRequested.emit(1)
+    qtbot.waitUntil(lambda: win.terminal_panel.tabs.count() == 1, timeout=5000)
+    assert core.terminals.get("term-2") is None

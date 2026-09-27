@@ -24,6 +24,7 @@ class TerminalManager:
         self._sessions: dict[str, TerminalSession] = {}
         self._lock = threading.Lock()
         self.on_created: list[Callable[[TerminalSession], None]] = []
+        self.on_exited: list[Callable[[TerminalSession], None]] = []
 
     @property
     def shell_path(self) -> str:
@@ -43,6 +44,7 @@ class TerminalManager:
             if session is not None and session.alive:
                 return session
             session = TerminalSession(name, self.shell_path, cwd, env=None)
+            session.on_exit.append(self._session_exited)
             session.start()
             self._sessions[name] = session
         for callback in list(self.on_created):
@@ -51,6 +53,21 @@ class TerminalManager:
             except Exception:  # noqa: BLE001
                 log.exception("on_created callback failed")
         return session
+
+    def _session_exited(self, session: TerminalSession) -> None:
+        for callback in list(self.on_exited):
+            try:
+                callback(session)
+            except Exception:  # noqa: BLE001
+                log.exception("on_exited callback failed")
+
+    def next_name(self, prefix: str = "term") -> str:
+        """A fresh session name: main, term-2, term-3, ..."""
+        with self._lock:
+            n = 2
+            while f"{prefix}-{n}" in self._sessions:
+                n += 1
+            return f"{prefix}-{n}"
 
     def close(self, name: str) -> None:
         with self._lock:

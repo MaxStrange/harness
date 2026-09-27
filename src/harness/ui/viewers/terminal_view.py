@@ -10,7 +10,15 @@ import logging
 from PySide6.QtCore import QObject, Qt, QUrl, QUrlQuery, Signal, Slot
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from harness.config import TerminalConfig, ThemeConfig
 from harness.terminal.session import TerminalSession
@@ -76,13 +84,31 @@ def xterm_theme(theme: ThemeConfig) -> dict:
 
 
 class TerminalView(QWidget):
+    restart_requested = Signal(str)
+
     def __init__(
         self, session: TerminalSession, config: TerminalConfig, theme: ThemeConfig
     ) -> None:
         super().__init__()
         self.session = session
+        self.exited = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        # Shown once the shell has exited: the view stays readable and offers a restart.
+        self.exit_bar = QWidget()
+        self.exit_bar.setObjectName("panel")
+        bar = QHBoxLayout(self.exit_bar)
+        bar.setContentsMargins(8, 4, 8, 4)
+        self.exit_label = QLabel("The shell has exited.")
+        bar.addWidget(self.exit_label, 1)
+        self.restart_button = QPushButton("Restart shell")
+        self.restart_button.setObjectName("accent")
+        self.restart_button.clicked.connect(lambda: self.restart_requested.emit(self.session.name))
+        bar.addWidget(self.restart_button)
+        self.exit_bar.setVisible(False)
+        self.exit_bar.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        layout.addWidget(self.exit_bar, 0)
         self.view = QWebEngineView()
         self.channel = QWebChannel(self.view.page())
         self.bridge = TerminalBridge(session)
@@ -97,10 +123,14 @@ class TerminalView(QWidget):
         query.addQueryItem("scrollback", str(config.scrollback_lines))
         url.setQuery(query)
         self.view.setUrl(url)
-        layout.addWidget(self.view)
+        layout.addWidget(self.view, 1)
 
     def focus_terminal(self) -> None:
         self.view.setFocus()
+
+    def mark_exited(self) -> None:
+        self.exited = True
+        self.exit_bar.setVisible(True)
 
     def closeEvent(self, event) -> None:
         self.bridge.detach()
@@ -108,7 +138,11 @@ class TerminalView(QWidget):
 
 
 class TerminalPanel(QWidget):
-    """One tab per terminal session."""
+    """One tab per terminal session, a "+" button for a new one, close buttons on the tabs."""
+
+    new_requested = Signal()
+    restart_requested = Signal(str)
+    close_requested = Signal(str)
 
     def __init__(self, config: TerminalConfig, theme: ThemeConfig) -> None:
         super().__init__()
@@ -118,6 +152,13 @@ class TerminalPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
+        self.tabs.setTabsClosable(True)
+        self.tabs.tabCloseRequested.connect(self._close_tab)
+        self.new_button = QPushButton("+")
+        self.new_button.setToolTip("New terminal")
+        self.new_button.setFixedWidth(32)
+        self.new_button.clicked.connect(self.new_requested.emit)
+        self.tabs.setCornerWidget(self.new_button, Qt.Corner.TopRightCorner)
         layout.addWidget(self.tabs)
         self._views: dict[str, TerminalView] = {}
 
@@ -125,11 +166,14 @@ class TerminalPanel(QWidget):
         existing = self._views.get(session.name)
         if existing is not None and existing.session is session:
             return existing
+        index = self.tabs.count()
         if existing is not None:
+            index = self.tabs.indexOf(existing)
             self.remove_session(session.name)
         view = TerminalView(session, self.config, self.theme)
+        view.restart_requested.connect(self.restart_requested.emit)
         self._views[session.name] = view
-        self.tabs.addTab(view, session.name)
+        self.tabs.insertTab(index, view, session.name)
         return view
 
     def remove_session(self, name: str) -> None:
@@ -139,6 +183,12 @@ class TerminalPanel(QWidget):
             view.bridge.detach()
             view.deleteLater()
 
+    def mark_exited(self, name: str) -> None:
+        view = self._views.get(name)
+        if view is not None:
+            view.mark_exited()
+            self.tabs.setTabText(self.tabs.indexOf(view), f"{name} (exited)")
+
     def show_session(self, name: str) -> bool:
         view = self._views.get(name)
         if view is None:
@@ -147,5 +197,19 @@ class TerminalPanel(QWidget):
         view.focus_terminal()
         return True
 
+    def current_name(self) -> str | None:
+        view = self.tabs.currentWidget()
+        return view.session.name if isinstance(view, TerminalView) else None
+
     def names(self) -> list[str]:
         return list(self._views)
+
+    def alive_names(self) -> list[str]:
+        return [
+            name for name, view in self._views.items() if not view.exited and view.session.alive
+        ]
+
+    def _close_tab(self, index: int) -> None:
+        view = self.tabs.widget(index)
+        if isinstance(view, TerminalView):
+            self.close_requested.emit(view.session.name)
