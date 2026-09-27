@@ -57,6 +57,14 @@ class _Relay(QObject):
     health = Signal(str, str, str)
 
 
+def _is_within(path: str, root: str) -> bool:
+    try:
+        Path(path).resolve().relative_to(Path(root).resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 def make_app_icon(theme: ThemeConfig) -> QIcon:
     """The lizard on a rounded slate tile, drawn at several sizes for crisp taskbar icons."""
     from harness.ui.critter import Palette, draw_lizard
@@ -137,6 +145,9 @@ class MainWindow(QMainWindow):
         if ui.file_explorer == "orbit":
             self.explorer = OrbitExplorer(explorer_root, self.theme, ui.file_explorer_show_hidden)
             self.explorer.file_selected.connect(self.composer.insert_text)
+            self.explorer.reveal_requested.connect(
+                lambda path: self.perform_handoff(Handoff.file_manager(path))
+            )
         else:
             self.explorer = FileExplorer(explorer_root)
         self.explorer.open_requested.connect(
@@ -436,6 +447,13 @@ class MainWindow(QMainWindow):
         self.core.store.update_project(
             project_id, name=name, root_dir=root_dir, instructions=instructions
         )
+        if root_dir and root_dir != (project.root_dir or "") and Path(root_dir).is_dir():
+            # Sessions of this project follow the new root unless they already sit inside it.
+            for record in self.core.store.list_sessions():
+                if record.project_id == project_id and not _is_within(record.cwd, root_dir):
+                    self.core.store.set_cwd(record.id, root_dir)
+                    if self.agent.session is not None and self.agent.session.id == record.id:
+                        self.agent.set_cwd(Path(root_dir))
         if self.agent.session is not None and self.agent.session.project_id == project_id:
             self.agent.set_project(project_id)  # rebuilds the system prompt
             self._session_opened(self.agent.session.id)
@@ -463,11 +481,18 @@ class MainWindow(QMainWindow):
         self.sessions.refresh()
 
     def move_session(self, session_id: str, project_id: str | None) -> None:
+        """Move a session into a project; it also adopts the project's root directory."""
+        project = self.core.store.get_project(project_id)
+        root = Path(project.root_dir) if project and project.root_dir else None
         if self.agent.session is not None and self.agent.session.id == session_id:
             self.agent.set_project(project_id)
+            if root is not None and root.is_dir():
+                self.agent.set_cwd(root)
             self._session_opened(session_id)
         else:
             self.core.store.set_session_project(session_id, project_id)
+            if root is not None and root.is_dir():
+                self.core.store.set_cwd(session_id, str(root))
         self.sessions.refresh()
 
     def edit_global_context(self) -> None:

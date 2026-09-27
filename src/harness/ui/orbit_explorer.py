@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -143,6 +144,7 @@ class OrbitExplorer(QWidget):
     open_requested = Signal(str)
     cwd_requested = Signal(str)
     file_selected = Signal(str)  # a file at the front was clicked: its absolute path
+    reveal_requested = Signal(str)  # show this path in the system file manager
     directory_changed = Signal(str)
 
     def __init__(self, root: str, theme: ThemeConfig, show_hidden: bool = False) -> None:
@@ -637,6 +639,13 @@ class OrbitExplorer(QWidget):
             menu.addAction(
                 "Use this directory as working directory", lambda: self.cwd_requested.emit(current)
             )
+        reveal_target = (
+            hit[1].entry.path if (hit is not None and not hit[1].entry.is_parent) else current
+        )
+        menu.addAction(
+            f"Open in {file_manager_name()}",
+            lambda: self.reveal_requested.emit(os.path.abspath(reveal_target)),
+        )
         menu.addSeparator()
         hidden = menu.addAction("Show hidden files")
         hidden.setCheckable(True)
@@ -820,6 +829,14 @@ class OrbitExplorer(QWidget):
             )
             painter.drawText(rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, text)
         painter.setOpacity(ring.alpha)
+
+
+def file_manager_name() -> str:
+    if sys.platform == "win32":
+        return "File Explorer"
+    if sys.platform == "darwin":
+        return "Finder"
+    return "file manager"
 
 
 def _shorten_path(path: str, home: Path) -> str:

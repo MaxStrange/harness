@@ -85,6 +85,16 @@ class TaskListStore:
             self._notify(session_id)
         return removed
 
+    def reorder(self, session_id: str, ordered_ids: list[str]) -> None:
+        """Put the tasks in ``ordered_ids`` order; ids not listed keep their relative order at the end."""
+        with self._lock:
+            tasks = self._lists.setdefault(session_id, TaskList()).tasks
+            by_id = {t.id: t for t in tasks}
+            ordered = [by_id[i] for i in ordered_ids if i in by_id]
+            rest = [t for t in tasks if t.id not in set(ordered_ids)]
+            tasks[:] = ordered + rest
+        self._notify(session_id)
+
     def clear(self, session_id: str) -> None:
         with self._lock:
             self._lists[session_id] = TaskList()

@@ -464,3 +464,62 @@ def test_critter_menu_and_skill_change_the_sprite(qtbot, window, harness_home):
     wait_turn(qtbot, win)
     assert win.status_strip.critter.kind == "songbird"
     assert win._critter_actions["songbird"].isChecked()
+
+
+def test_moving_into_a_project_adopts_its_root(qtbot, window, tmp_path):
+    win, model, core = window
+    root = tmp_path / "repos" / "harness"
+    root.mkdir(parents=True)
+    project = core.store.create_project("harness", str(root), "")
+    other = core.store.create_session(str(tmp_path / "repos"), "moved later")
+    win.move_session(other.id, project.id)
+    assert core.store.get_session(other.id).cwd == str(root)
+    win.open_session(other.id)
+    assert win.agent.session.cwd == root and Path(win.explorer.root) == root
+    # Changing the project's root carries its sessions along ...
+    new_root = tmp_path / "elsewhere"
+    new_root.mkdir()
+    from harness.ui import main_window as mw
+
+    monkeypatch_values = ("harness", str(new_root), "")
+    mw.ProjectDialog.exec = lambda self: mw.ProjectDialog.DialogCode.Accepted
+    mw.ProjectDialog.values = lambda self: monkeypatch_values
+    try:
+        win.edit_project(project.id)
+    finally:
+        del mw.ProjectDialog.exec, mw.ProjectDialog.values
+    assert core.store.get_session(other.id).cwd == str(new_root)
+    assert win.agent.session.cwd == new_root
+    # ... but not a session that already works inside the new root.
+    inside = new_root / "sub"
+    inside.mkdir()
+    win.set_cwd(str(inside))
+    mw.ProjectDialog.exec = lambda self: mw.ProjectDialog.DialogCode.Accepted
+    mw.ProjectDialog.values = lambda self: ("harness", str(new_root), "changed instructions")
+    try:
+        win.edit_project(project.id)
+    finally:
+        del mw.ProjectDialog.exec, mw.ProjectDialog.values
+    assert win.agent.session.cwd == inside
+
+
+def test_task_list_drag_reorder(qtbot, window):
+    win, model, core = window
+    sid = win.agent.session.id
+    a = core.task_lists.add(sid, "first")
+    b = core.task_lists.add(sid, "second")
+    c = core.task_lists.add(sid, "third")
+    win.perform_handoff(Handoff.tasks())
+    qtbot.waitUntil(lambda: win.task_view.list.count() == 3, timeout=3000)
+    win.task_view.list.reordered.emit([c.id, a.id, b.id])  # what a drop produces
+    assert [t.text for t in core.task_lists.get(sid).tasks] == ["third", "first", "second"]
+    assert win.task_view.list.order() == [c.id, a.id, b.id]
+    assert "drag to reorder" in win.task_view.summary.text()
+
+
+def test_explorer_reveal_in_file_manager(qtbot, window, tmp_path, monkeypatch):
+    win, model, core = window
+    opened = []
+    monkeypatch.setattr(win.handoffs, "open_external", lambda h: opened.append(h) or None)
+    win.explorer.reveal_requested.emit(str(tmp_path))
+    assert opened and opened[0].action == "file_manager" and opened[0].target == str(tmp_path)
