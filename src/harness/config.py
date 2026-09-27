@@ -238,6 +238,7 @@ class ThemeConfig(StrictModel):
     text: str = "#e6e9ec"
     text_muted: str = "#a3adb7"
     accent: str = "#7cb342"
+    accent_hover: str = "#93c95a"
     accent_text: str = "#101409"
     user_bubble: str = "#3a4a3a"
     assistant_bubble: str = "#343b42"

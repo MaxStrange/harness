@@ -159,6 +159,7 @@ ui:
     text: "#e6e9ec"
     text_muted: "#a3adb7"
     accent: "#7cb342"
+    accent_hover: "#93c95a"      # selected item under the mouse
     accent_text: "#101409"
     user_bubble: "#3a4a3a"
     assistant_bubble: "#343b42"

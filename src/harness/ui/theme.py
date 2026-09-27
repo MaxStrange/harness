@@ -37,6 +37,7 @@ def build_stylesheet(ui: UiConfig) -> str:
     QListWidget::item, QTreeView::item {{ padding: 3px; }}
     QListWidget::item:selected, QTreeView::item:selected {{ background: {t.accent}; color: {t.accent_text}; }}
     QListWidget::item:hover, QTreeView::item:hover {{ background: {t.surface_alt}; }}
+    QListWidget::item:selected:hover, QTreeView::item:selected:hover {{ background: {t.accent_hover}; color: {t.accent_text}; }}
     QHeaderView::section {{ background: {t.surface_alt}; color: {t.text_muted}; border: none; padding: 3px; }}
     QTabWidget::pane {{ border: 1px solid {t.border}; border-radius: 6px; }}
     QTabBar::tab {{ background: {t.surface}; padding: 5px 10px; border: 1px solid {t.border}; border-bottom: none; border-top-left-radius: 5px; border-top-right-radius: 5px; }}
