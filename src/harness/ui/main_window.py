@@ -124,6 +124,7 @@ class MainWindow(QMainWindow):
         explorer_root = str(Path(ui.file_explorer_root).expanduser())
         if ui.file_explorer == "orbit":
             self.explorer = OrbitExplorer(explorer_root, self.theme, ui.file_explorer_show_hidden)
+            self.explorer.file_selected.connect(self.composer.insert_text)
         else:
             self.explorer = FileExplorer(explorer_root)
         self.explorer.open_requested.connect(
