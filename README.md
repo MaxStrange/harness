@@ -10,8 +10,8 @@ The requirements are in [docs/requirements.md](docs/requirements.md); the design
 Milestones 1 and 2 are implemented, plus most of milestone 3's skills:
 
 - Layout: viewer dock (far left, magnifying), embedded side panel (terminal / image viewer / task
-  list), central chat with Markdown and syntax highlighting, file explorer (standard tree for now)
-  and sessions panel with full-text search.
+  list), central chat with Markdown and syntax highlighting, the orbiting file explorer (UI3, with
+  `ui.file_explorer: tree` as a plain fallback) and sessions panel with full-text search.
 - Model bring-up: streaming, native or text tool calling, stop, automatic and manual compaction,
   offline status without losing sessions.
 - All twenty skills from the requirements, each with its handoff.
@@ -19,8 +19,8 @@ Milestones 1 and 2 are implemented, plus most of milestone 3's skills:
   in front of all web content, untrusted locations, raw URL gate.
 - Logging (three rolling channels), single YAML config with commented defaults, SQLite sessions.
 
-Not yet done: the orbiting file explorer (UI3), dock polish, and anything that needs a real screen or
-the real model stack (see "Untested" below).
+Not yet done: memory across sessions (SH3, deliberately later) and further polish once the explorer and
+dock have been used for a while.
 
 ## Install
 
@@ -81,8 +81,8 @@ bash), the session store and the agent loop, and the Qt widgets offscreen.
 
 This code was written without a display or the model stack, so the following need a real run:
 
-- The look of the window on a real screen (only offscreen screenshots so far), the dock's
-  magnification feel, splitter defaults.
+- The feel of the orbiting explorer (roll speed, snap, the expand animation) and the dock's
+  magnification; the constants at the top of `ui/orbit_explorer.py` and `ui/dock.py` tune them.
 - The xterm.js terminal inside QtWebEngine (the Python side and the marker capture are tested; the
   JavaScript page and QWebChannel wiring are not).
 - Windows: PowerShell hooks in `src/harness/terminal/shell/harness.ps1`, pywinpty, `explorer`

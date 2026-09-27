@@ -37,6 +37,10 @@ class FileExplorer(QWidget):
         self.tree.customContextMenuRequested.connect(self._context_menu)
         layout.addWidget(self.tree)
 
+    @property
+    def root(self) -> str:
+        return self.model.rootPath()
+
     def set_root(self, root: str) -> None:
         self.model.setRootPath(root)
         self.tree.setRootIndex(self.model.index(root))

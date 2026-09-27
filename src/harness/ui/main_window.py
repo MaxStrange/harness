@@ -34,6 +34,7 @@ from harness.ui.chat.composer import Composer
 from harness.ui.dock import Dock
 from harness.ui.file_explorer import FileExplorer
 from harness.ui.handoff import HandoffExecutor
+from harness.ui.orbit_explorer import OrbitExplorer
 from harness.ui.sessions_panel import SessionsPanel
 from harness.ui.viewers.image_viewer import ImageViewer
 from harness.ui.viewers.task_list_view import TaskListView
@@ -120,7 +121,11 @@ class MainWindow(QMainWindow):
         chat_layout.addWidget(self.chat, 1)
         chat_layout.addWidget(self.composer)
 
-        self.explorer = FileExplorer(str(Path(ui.file_explorer_root).expanduser()))
+        explorer_root = str(Path(ui.file_explorer_root).expanduser())
+        if ui.file_explorer == "orbit":
+            self.explorer = OrbitExplorer(explorer_root, self.theme, ui.file_explorer_show_hidden)
+        else:
+            self.explorer = FileExplorer(explorer_root)
         self.explorer.open_requested.connect(
             lambda path: self.perform_handoff(Handoff.editor(path))
         )

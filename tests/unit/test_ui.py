@@ -263,7 +263,7 @@ def test_set_cwd_moves_explorer(qtbot, window, tmp_path):
     sub = tmp_path / "elsewhere"
     sub.mkdir()
     win.set_cwd(str(sub))
-    assert Path(win.explorer.model.rootPath()) == sub
+    assert Path(win.explorer.root) == sub
     assert win.cwd_label.text() == str(sub)
 
 

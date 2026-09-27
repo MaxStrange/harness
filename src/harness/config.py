@@ -319,6 +319,8 @@ class UiConfig(StrictModel):
     font_size: int = Field(default=11, gt=0)
     panels: PanelsConfig = Field(default_factory=PanelsConfig)
     file_explorer_root: str = "~"
+    file_explorer: Literal["orbit", "tree"] = "orbit"
+    file_explorer_show_hidden: bool = False
 
     @field_validator("file_explorer_root")
     @classmethod
