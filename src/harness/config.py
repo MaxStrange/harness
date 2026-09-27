@@ -402,3 +402,45 @@ def load_config(paths: HarnessPaths | None = None, path: Path | None = None) -> 
     except OSError as exc:
         raise ConfigError(f"cannot read {config_path}: {exc}") from exc
     return parse_config(text, source=str(config_path))
+
+
+def set_config_value(path: Path, dotted_key: str, value: str) -> None:
+    """Change one scalar setting in the config file in place, keeping comments.
+
+    Works on the two-level ``section:`` / ``  key:`` layout the default file uses
+    (``ui.critter``, ``handoff.editor`` ...). A missing key is appended to its
+    section; a missing section is appended to the file.
+    """
+    section, _, key = dotted_key.partition(".")
+    if not key:
+        raise ValueError("expected a section.key name")
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    rendered = yaml.safe_dump(value, default_flow_style=True).strip().removesuffix("\n...")
+    rendered = rendered.strip()
+    section_start = next(
+        (i for i, line in enumerate(lines) if line.rstrip() == f"{section}:"), None
+    )
+    if section_start is None:
+        lines += ["", f"{section}:", f"  {key}: {rendered}"]
+    else:
+        end = len(lines)
+        for i in range(section_start + 1, len(lines)):
+            if lines[i] and not lines[i].startswith((" ", "#")):
+                end = i
+                break
+        for i in range(section_start + 1, end):
+            stripped = lines[i].lstrip()
+            if (
+                lines[i].startswith("  ")
+                and not lines[i].startswith("   ")
+                and stripped.startswith(f"{key}:")
+            ):
+                comment = ""
+                rest = stripped[len(key) + 1 :]
+                if " #" in rest:
+                    comment = "  #" + rest.split(" #", 1)[1]
+                lines[i] = f"  {key}: {rendered}{comment}"
+                break
+        else:
+            lines.insert(end, f"  {key}: {rendered}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")

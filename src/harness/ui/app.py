@@ -41,7 +41,10 @@ def run(config_path: Path | None = None) -> int:
     app.setStyleSheet(build_stylesheet(config.ui))
 
     window_holder: dict = {}
-    ui_bridge = QtUiBridge(lambda handoff: window_holder["window"].handoffs.open_external(handoff))
+    ui_bridge = QtUiBridge(
+        lambda handoff: window_holder["window"].handoffs.open_external(handoff),
+        lambda name, value: window_holder["window"].apply_preference(name, value),
+    )
     core = build_core(config, paths, ui=ui_bridge)
     agent = Agent(
         config, core.main_model, core.registry, core.runner, core.services, core.store, paths=paths
@@ -54,11 +57,29 @@ def run(config_path: Path | None = None) -> int:
         window.open_session(sessions[0].id)
     else:
         window.new_session()
+    warmup = _warm_up_web_engine()
     if config.ui.panels.start_maximized:
         window.showMaximized()
     else:
         window.show()
     code = app.exec()
+    del warmup
     log.info("harness exiting")
     core.shutdown()
     return code
+
+
+def _warm_up_web_engine():
+    """Create the first web view before the window is shown.
+
+    QtWebEngine starts its GPU process and compositor on the first view, which
+    makes the whole window flicker if that first view is the embedded terminal
+    opened later; paying that cost here, offscreen, keeps it out of sight.
+    """
+    try:
+        from PySide6.QtWebEngineWidgets import QWebEngineView
+    except ImportError:  # pragma: no cover
+        return None
+    view = QWebEngineView()
+    view.setHtml("<html></html>")
+    return view

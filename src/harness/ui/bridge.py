@@ -111,9 +111,14 @@ class QtUiBridge(QObject):
     clipboard = Signal(str)
     embedded_requested = Signal(object)
 
-    def __init__(self, open_external: Callable[[Handoff], str | None]) -> None:
+    def __init__(
+        self,
+        open_external: Callable[[Handoff], str | None],
+        set_preference: Callable[[str, str], str | None] | None = None,
+    ) -> None:
         super().__init__()
         self._open_external = open_external
+        self._set_preference = set_preference
         self.invoker = MainThreadInvoker()
 
     def notify(self, title: str, body: str) -> None:
@@ -132,6 +137,14 @@ class QtUiBridge(QObject):
 
     def open_embedded(self, handoff: Handoff) -> None:
         self.embedded_requested.emit(handoff)
+
+    def set_preference(self, name: str, value: str) -> str | None:
+        if self._set_preference is None:
+            return "preferences are not available"
+        try:
+            return self.invoker.call(lambda: self._set_preference(name, value))
+        except Exception as exc:  # noqa: BLE001
+            return f"{exc.__class__.__name__}: {exc}"
 
 
 class AgentController(QObject):

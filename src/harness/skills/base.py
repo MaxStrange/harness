@@ -173,6 +173,10 @@ class UiBridge(Protocol):
 
     def open_embedded(self, handoff: Handoff) -> None: ...
 
+    def set_preference(self, name: str, value: str) -> str | None:
+        """Change a live UI preference (e.g. the critter). Returns an error string or None."""
+        ...
+
 
 class RecordingUi:
     """A :class:`UiBridge` that records calls, for tests and headless use."""
@@ -194,6 +198,11 @@ class RecordingUi:
 
     def open_embedded(self, handoff: Handoff) -> None:
         self.opened.append(handoff)
+
+    def set_preference(self, name: str, value: str) -> str | None:
+        self.preferences = getattr(self, "preferences", {})
+        self.preferences[name] = value
+        return None
 
 
 @dataclass

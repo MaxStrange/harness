@@ -25,13 +25,14 @@ from PySide6.QtWidgets import (
 
 from harness.agent.loop import Agent
 from harness.bootstrap import HarnessCore
+from harness.config import set_config_value
 from harness.skills.base import ApprovalDecision, Handoff
 from harness.skills.runner import SkillOutcome
 from harness.terminal.session import TerminalSession
 from harness.ui.bridge import AgentController, QtUiBridge
 from harness.ui.chat.chat_view import ChatView
 from harness.ui.chat.composer import Composer
-from harness.ui.critter import StatusStrip
+from harness.ui.critter import CRITTERS, StatusStrip
 from harness.ui.dock import Dock
 from harness.ui.file_explorer import FileExplorer
 from harness.ui.handoff import HandoffExecutor
@@ -235,6 +236,18 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self._action("Image viewer", lambda: self.show_view("image")))
         view_menu.addAction(self._action("Task list", lambda: self.show_view("tasks")))
         view_menu.addAction(self._action("Hide side panel", self.hide_side_panel))
+        view_menu.addSeparator()
+        critter_menu = view_menu.addMenu("Critter")
+        self._critter_actions: dict[str, QAction] = {}
+        for kind in CRITTERS:
+            action = QAction(kind.capitalize(), self)
+            action.setCheckable(True)
+            action.setChecked(kind == self.config.ui.critter)
+            action.triggered.connect(
+                lambda _checked=False, k=kind: self.apply_preference("critter", k)
+            )
+            critter_menu.addAction(action)
+            self._critter_actions[kind] = action
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction(self._action("Skills...", self.show_skills))
         help_menu.addAction(self._action("About", self.show_about))
@@ -355,6 +368,26 @@ class MainWindow(QMainWindow):
         count = self.core.store.delete_all()
         self.new_session()
         self.chat.add_notice(f"Deleted {count} session(s).")
+
+    # -- preferences -------------------------------------------------------------------
+
+    def apply_preference(self, name: str, value: str) -> str | None:
+        """Change a preference now and persist it to the config file. Returns an error or None."""
+        if name == "critter":
+            if value not in CRITTERS:
+                return f"unknown critter {value!r}"
+            self.config.ui.critter = value
+            self.status_strip.critter.set_kind(value)
+            for kind, action in self._critter_actions.items():
+                action.setChecked(kind == value)
+        else:
+            return f"unknown preference {name!r}"
+        try:
+            set_config_value(self.core.paths.config_file, f"ui.{name}", value)
+        except (OSError, ValueError) as exc:
+            log.warning("could not save %s to the config: %s", name, exc)
+            return f"changed for this run, but saving to the config failed: {exc}"
+        return None
 
     # -- projects and context ------------------------------------------------------
 
@@ -576,11 +609,9 @@ class MainWindow(QMainWindow):
 
     def _on_terminal_created(self, session: TerminalSession) -> None:
         self.terminal_panel.add_session(session)
-        self.dock.set_badge("terminal", len(self.terminal_panel.alive_names()))
 
     def _on_terminal_exited(self, session: TerminalSession) -> None:
         self.terminal_panel.mark_exited(session.name)
-        self.dock.set_badge("terminal", len(self.terminal_panel.alive_names()))
 
     def new_terminal(self) -> None:
         name = self.core.terminals.next_name()
@@ -594,12 +625,10 @@ class MainWindow(QMainWindow):
         session = self.core.terminals.get_or_create(name, self._session_cwd())
         self.terminal_panel.add_session(session)
         self.terminal_panel.show_session(name)
-        self.dock.set_badge("terminal", len(self.terminal_panel.alive_names()))
 
     def close_terminal(self, name: str) -> None:
         self.core.terminals.close(name)
         self.terminal_panel.remove_session(name)
-        self.dock.set_badge("terminal", len(self.terminal_panel.alive_names()))
 
     # -- notifications and health -----------------------------------------------------
 

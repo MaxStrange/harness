@@ -14,7 +14,9 @@ Milestones 1 and 2 are implemented, plus most of milestone 3's skills:
   `ui.file_explorer: tree` as a plain fallback) and sessions panel with full-text search.
 - Model bring-up: streaming, native or text tool calling, stop, automatic and manual compaction,
   offline status without losing sessions.
-- All twenty skills from the requirements, each with its handoff.
+- All twenty skills from the requirements, each with its handoff, plus `kicad_inspect` (schematic
+  hierarchy, BOM, board, nets straight from KiCad files) and `harness_settings` (ask the model to
+  change the sprite).
 - Security: command approval with summarizer, protected paths, private-network blocking, web reader
   in front of all web content, untrusted locations, raw URL gate.
 - Logging (three rolling channels), single YAML config with commented defaults, SQLite sessions.
@@ -65,6 +67,12 @@ harness --stack-check        # are the servers and SearXNG reachable?
 pytest tests/stack -v -s     # the full stack tests: streaming, tool calling, context size,
                              # summarizer, web reader injection resistance, SearXNG JSON API
 ```
+
+## The critter
+
+The sprite above the message box animates while the model works. Pick another one under
+View > Critter (lizard, turtle, sloth, dinosaur, songbird), or just ask the model; the choice is
+saved to `ui.critter` in the config.
 
 ## Projects and context
 

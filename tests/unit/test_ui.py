@@ -40,7 +40,10 @@ def window(qtbot, harness_home, tmp_path):
     cfg.web.untrusted_dirs = []
     cfg.security.deny_paths = []
     holder = {}
-    bridge = QtUiBridge(lambda h: holder["w"].handoffs.open_external(h))
+    bridge = QtUiBridge(
+        lambda h: holder["w"].handoffs.open_external(h),
+        lambda n, v: holder["w"].apply_preference(n, v),
+    )
     core = build_core(cfg, harness_home, ui=bridge)
     model = FakeModel()
     core.main_model = model  # the fake replaces the network client
@@ -416,3 +419,22 @@ def test_projects_in_sessions_panel(qtbot, window, tmp_path):
         if win.sessions.list.item(i).data(0x0102) == "project"
     ]
     assert headers == ["Thesis  (1)", "No project  (1)"]
+
+
+def test_critter_menu_and_skill_change_the_sprite(qtbot, window, harness_home):
+    win, model, core = window
+    from harness.config import load_config
+
+    load_config(harness_home)  # a config file to persist into
+    assert win.apply_preference("critter", "turtle") is None
+    assert win.status_strip.critter.kind == "turtle"
+    assert "critter: turtle" in harness_home.config_file.read_text()
+    assert win.apply_preference("critter", "dragon") is not None
+    model.script += [
+        FakeModel.tool_call("harness_settings", action="set", setting="critter", value="songbird"),
+        "Done.",
+    ]
+    win.send_message("make the sprite a songbird")
+    wait_turn(qtbot, win)
+    assert win.status_strip.critter.kind == "songbird"
+    assert win._critter_actions["songbird"].isChecked()

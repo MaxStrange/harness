@@ -114,3 +114,20 @@ def test_default_config_follows_harness_home(harness_home):
     assert str(harness_home.home) in text and "~/.harness" not in text
     cfg = parse_config(text, "default")
     assert cfg.sessions.db_path == str(harness_home.sessions_db)
+
+
+def test_set_config_value_keeps_comments(tmp_path):
+    from harness.config import set_config_value
+
+    path = tmp_path / "config.yml"
+    path.write_text(
+        "# top\nui:\n  window_title: AI Harness\n  critter: lizard   # sprite\n\nweb:\n  searxng_url: http://x\n"
+    )
+    set_config_value(path, "ui.critter", "turtle")
+    text = path.read_text()
+    assert "  critter: turtle  # sprite" in text and "# top" in text and "searxng_url" in text
+    set_config_value(path, "ui.font_size", "12")
+    assert "  font_size: '12'" in path.read_text() or "  font_size: 12" in path.read_text()
+    set_config_value(path, "handoff.editor", "vim {path}")
+    assert "handoff:\n  editor: vim {path}" in path.read_text()
+    assert parse_config(path.read_text(), "c").ui.critter == "turtle"
