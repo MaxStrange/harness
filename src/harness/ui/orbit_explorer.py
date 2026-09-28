@@ -2,8 +2,10 @@
 
 Each directory is a ring of icons seen almost edge-on: a wide, flat ellipse
 where the item at the front is largest and brightest and the ones at the back
-are small and dim. The ring's radius grows with the number of entries, so a
-big directory is a big ring of which only part is on screen.
+are small and dim. A ring has at most MAX_SLOTS places; a bigger directory
+scrolls through them like a carousel, entries fading in and out at the back.
+The camera zooms so the current ring, with the labels of its front row, fits
+the widget whatever its size.
 
 Rings live in a world; a camera looks at it. Expanding a directory puts the
 children's ring somewhere off to the side of the parent (in the direction of
@@ -11,7 +13,7 @@ the clicked item) and flies the camera there, like hopping between star
 systems; the parent shrinks and stays where it was, so going back is a flight
 too. Hovering an item zooms the camera towards it. The wheel, touchpad scroll
 gestures, a horizontal drag and the arrow keys roll the ring, which snaps to
-the nearest item when it stops.
+the nearest item when it stops. Typing a name brings the first match to the front.
 
 The widget exposes the same interface as the tree stub (``set_root``,
 ``reveal``, ``root``, ``open_requested``, ``cwd_requested``) so the main window
@@ -23,6 +25,7 @@ from __future__ import annotations
 import math
 import os
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -48,7 +51,14 @@ EASE = 0.16  # per tick, for camera and ring transforms
 RING_RATIO = 0.26  # ellipse height / width: "almost in plane"
 ICON_FRONT = 44.0  # px, front icon size on a full-size ring at zoom 1
 ICON_BACK_FACTOR = 0.42  # back icons are this fraction of the front size
-ITEM_SPACING = 64.0  # px along the front of the ring per entry: sets the radius
+ITEM_SPACING = 64.0  # px along the front of the ring per slot: sets the radius
+MAX_SLOTS = 12  # places on a ring; bigger directories scroll through them
+MIN_RX = 120.0  # world radius of a ring with only a few entries
+CRUMB_HEIGHT = 24.0  # px reserved at the top for the path
+MARGIN = 8.0  # px kept free around the fitted ring
+LABEL_ROOM = 26.0  # px below the front icon for its label
+MIN_FIT_ZOOM = 0.45  # the fitted zoom never goes below this; tiny widgets clip instead
+TYPE_AHEAD_SECONDS = 1.0  # a pause this long starts a new type-to-jump prefix
 PARENT_SCALE = 0.55  # a ring you came from shrinks to this
 PARENT_ALPHA = 0.55
 HOVER_ZOOM = 1.28  # camera zoom when an item is under the mouse
@@ -84,20 +94,45 @@ class Ring:
     dying: bool = False
 
     @property
+    def slots(self) -> int:
+        return max(1, min(len(self.entries), MAX_SLOTS))
+
+    @property
     def step(self) -> float:
-        return 2 * math.pi / max(1, len(self.entries))
+        return 2 * math.pi / self.slots
+
+    @property
+    def scrolls(self) -> bool:
+        """More entries than slots: the ring is a window onto the directory."""
+        return len(self.entries) > self.slots
 
     @property
     def rx(self) -> float:
-        """World radius: enough for every entry to have ITEM_SPACING along the front."""
-        return max(120.0, len(self.entries) * ITEM_SPACING / (2 * math.pi))
+        """World radius: enough for every slot to have ITEM_SPACING along the front."""
+        return max(MIN_RX, self.slots * ITEM_SPACING / (2 * math.pi))
 
     @property
     def ry(self) -> float:
         return self.rx * RING_RATIO
 
+    @property
+    def position(self) -> float:
+        """The (fractional) entry index at the front."""
+        return (math.pi / 2 - self.rotation) / self.step
+
+    def offset(self, index: int) -> float:
+        """How many slots ``index`` is from the front, wrapped to [-n/2, n/2)."""
+        n = max(1, len(self.entries))
+        return (index - self.position + n / 2) % n - n / 2
+
+    def visibility(self, index: int) -> float:
+        """1 on the ring, fading to 0 across the last slot before the back seam."""
+        if not self.scrolls:
+            return 1.0
+        return max(0.0, min(1.0, self.slots / 2 - abs(self.offset(index))))
+
     def angle_of(self, index: int) -> float:
-        return self.rotation + index * self.step
+        return math.pi / 2 + self.offset(index) * self.step
 
     def world_pos(self, index: int) -> QPointF:
         angle = self.angle_of(index)
@@ -109,13 +144,14 @@ class Ring:
     def front_index(self) -> int | None:
         if not self.entries:
             return None
-        return max(range(len(self.entries)), key=lambda i: math.sin(self.angle_of(i)))
+        return round(self.position) % len(self.entries)
 
     def rotation_to_front(self, index: int) -> float:
         """The rotation that puts ``index`` exactly at the front, nearest to the current one."""
         target = math.pi / 2 - index * self.step
-        turns = round((self.rotation - target) / (2 * math.pi))
-        return target + turns * 2 * math.pi
+        period = max(1, len(self.entries)) * self.step  # 2 pi unless the ring scrolls
+        turns = round((self.rotation - target) / period)
+        return target + turns * period
 
 
 @dataclass
@@ -125,6 +161,7 @@ class ItemGeometry:
     pos: QPointF  # screen
     size: float  # screen
     depth: float  # 0 = back, 1 = front
+    visibility: float = 1.0  # fades to 0 at the back seam of a scrolling ring
 
 
 @dataclass
@@ -161,6 +198,8 @@ class OrbitExplorer(QWidget):
         self._press_pos: QPointF | None = None
         self._drag_last_x: float | None = None
         self._dragging = False
+        self._typed = ""
+        self._typed_at = 0.0
         self._timer = QTimer(self)
         self._timer.setInterval(TICK_MS)
         self._timer.timeout.connect(self._tick)
@@ -190,7 +229,8 @@ class OrbitExplorer(QWidget):
         self._flight = None
         ring = self._push_ring(self._root, QPointF(0, 0))
         ring.scale, ring.alpha = 1.0, 1.0
-        self.camera = Camera(QPointF(ring.center), 1.0, QPointF(ring.center), 1.0)
+        focus, zoom = self._focus(ring), self.fit_zoom(ring)
+        self.camera = Camera(QPointF(focus), zoom, QPointF(focus), zoom)
         self.update()
 
     def reveal(self, path: str) -> None:
@@ -319,16 +359,43 @@ class OrbitExplorer(QWidget):
 
     def _fly_to(self, ring: Ring) -> None:
         self._hover_index = None
-        self._flight = (QPointF(self.camera.center), QPointF(ring.center), 0.0)
-        self.camera.target_center = QPointF(ring.center)
-        self.camera.target_zoom = 1.0
+        cam = self.camera
+        focus, zoom = self._focus(ring), self.fit_zoom(ring)
+        self._flight = (QPointF(cam.center), QPointF(focus), cam.zoom, zoom, 0.0)
+        cam.target_center, cam.target_zoom = QPointF(focus), zoom
         self._start()
+
+    def _anchor_y(self) -> float:
+        """Screen y of the camera centre: the middle of the area below the path."""
+        return CRUMB_HEIGHT + (self.height() - CRUMB_HEIGHT) / 2
+
+    @staticmethod
+    def _extent(ring: Ring, zoom: float) -> tuple[float, float, float]:
+        """Screen half-width, and height above and below the centre, of ``ring`` at ``zoom``."""
+        half_width = (ring.rx + ICON_FRONT * 0.45) * zoom
+        above = (ring.ry + ICON_FRONT * ICON_BACK_FACTOR * 0.6) * zoom
+        below = (ring.ry + ICON_FRONT * 0.78) * zoom + LABEL_ROOM
+        return half_width, above, below
+
+    def fit_zoom(self, ring: Ring) -> float:
+        """The largest zoom (at most 1) at which ``ring`` and its front labels fit the widget."""
+        half_width, above, below = self._extent(ring, 1.0)
+        width = self.width() - 2 * MARGIN
+        height = self.height() - CRUMB_HEIGHT - 2 * MARGIN - LABEL_ROOM
+        zoom = min(1.0, width / (2 * half_width), height / (above + below - LABEL_ROOM))
+        return max(MIN_FIT_ZOOM, zoom)
+
+    def _focus(self, ring: Ring) -> QPointF:
+        """Camera centre that centres ``ring`` vertically, front labels included."""
+        zoom = self.fit_zoom(ring)
+        _, above, below = self._extent(ring, zoom)
+        return QPointF(ring.center.x(), ring.center.y() + (below - above) / 2 / zoom)
 
     def to_screen(self, world: QPointF) -> QPointF:
         cam = self.camera
         return QPointF(
             (world.x() - cam.center.x()) * cam.zoom + self.width() / 2,
-            (world.y() - cam.center.y()) * cam.zoom + self.height() * 0.55,
+            (world.y() - cam.center.y()) * cam.zoom + self._anchor_y(),
         )
 
     def _aim_camera(self) -> None:
@@ -336,16 +403,17 @@ class OrbitExplorer(QWidget):
         ring = self.current
         if ring is None or self._flight is not None:
             return
+        focus, zoom = self._focus(ring), self.fit_zoom(ring)
         if self._hover_index is not None and self._hover_index < len(ring.entries):
             item = ring.world_pos(self._hover_index)
             self.camera.target_center = QPointF(
-                ring.center.x() + (item.x() - ring.center.x()) * HOVER_PULL,
-                ring.center.y() + (item.y() - ring.center.y()) * HOVER_PULL,
+                focus.x() + (item.x() - ring.center.x()) * HOVER_PULL,
+                focus.y() + (item.y() - ring.center.y()) * HOVER_PULL,
             )
-            self.camera.target_zoom = HOVER_ZOOM
+            self.camera.target_zoom = zoom * HOVER_ZOOM
         else:
-            self.camera.target_center = QPointF(ring.center)
-            self.camera.target_zoom = 1.0
+            self.camera.target_center = focus
+            self.camera.target_zoom = zoom
 
     # -- geometry -------------------------------------------------------------------
 
@@ -353,11 +421,15 @@ class OrbitExplorer(QWidget):
         zoom = self.camera.zoom
         items = []
         for i, entry in enumerate(ring.entries):
+            visibility = ring.visibility(i)
+            if visibility <= 0.0:
+                continue
             depth = (math.sin(ring.angle_of(i)) + 1) / 2
             size = (
                 ICON_FRONT * ring.scale * zoom * (ICON_BACK_FACTOR + (1 - ICON_BACK_FACTOR) * depth)
             )
-            items.append(ItemGeometry(entry, i, self.to_screen(ring.world_pos(i)), size, depth))
+            pos = self.to_screen(ring.world_pos(i))
+            items.append(ItemGeometry(entry, i, pos, size, depth, visibility))
         return items
 
     def item_at(self, pos: QPointF) -> tuple[Ring, ItemGeometry] | None:
@@ -366,6 +438,8 @@ class OrbitExplorer(QWidget):
         if ring is None:
             return None
         for item in sorted(self.item_geometry(ring), key=lambda g: -g.depth):
+            if item.visibility < 0.5:
+                continue
             half = item.size / 2 + 4
             if abs(pos.x() - item.pos.x()) <= half and abs(pos.y() - item.pos.y()) <= half + 10:
                 return ring, item
@@ -400,8 +474,8 @@ class OrbitExplorer(QWidget):
         ring = self.current
         if ring is None or not ring.entries:
             return
-        front = ring.front_index()
-        assert front is not None
+        # From where a snap under way will land, so quick wheel notches and key repeats add up.
+        front = self._snap_front(ring)
         self.bring_to_front(ring, (front + direction) % len(ring.entries))
 
     def bring_to_front(self, ring: Ring, index: int, animate: bool = True) -> None:
@@ -445,16 +519,17 @@ class OrbitExplorer(QWidget):
                     moving = True
         # Camera: a flight has its own curve; otherwise ease towards the hover target.
         if self._flight is not None:
-            start, end, t = self._flight
+            start, end, zoom_from, zoom_to, t = self._flight
             t = min(1.0, t + dt / FLIGHT_SECONDS)
             e = _smoothstep(t)
             cam.center = QPointF(
                 start.x() + (end.x() - start.x()) * e, start.y() + (end.y() - start.y()) * e
             )
-            cam.zoom = 1.0 - FLIGHT_DIP * math.sin(math.pi * t)
-            self._flight = (start, end, t) if t < 1.0 else None
+            base = zoom_from + (zoom_to - zoom_from) * e
+            cam.zoom = base * (1.0 - FLIGHT_DIP * math.sin(math.pi * t))
+            self._flight = (start, end, zoom_from, zoom_to, t) if t < 1.0 else None
             if self._flight is None:
-                cam.center, cam.zoom = QPointF(end), 1.0
+                cam.center, cam.zoom = QPointF(end), zoom_to
                 self._aim_camera()
             moving = True
         else:
@@ -497,6 +572,20 @@ class OrbitExplorer(QWidget):
         self.update()
 
     # -- events -----------------------------------------------------------------------
+
+    def resizeEvent(self, event) -> None:
+        """Refit to the new size; a flight in progress retargets itself."""
+        super().resizeEvent(event)
+        ring = self.current
+        if ring is None:
+            return
+        if self._flight is not None:
+            start, _, zoom_from, _, t = self._flight
+            self._flight = (start, self._focus(ring), zoom_from, self.fit_zoom(ring), t)
+            return
+        self._aim_camera()
+        self.camera.center = QPointF(self.camera.target_center)
+        self.camera.zoom = self.camera.target_zoom
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         pos = event.position()
@@ -611,8 +700,54 @@ class OrbitExplorer(QWidget):
                     self.expand(entry)
                 elif key != Qt.Key.Key_Down:
                     self.open_requested.emit(os.path.abspath(entry.path))
+        elif self._is_typing(event):
+            self.type_ahead(event.text())
         else:
             super().keyPressEvent(event)
+
+    @staticmethod
+    def _is_typing(event: QKeyEvent) -> bool:
+        modifiers = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
+        text = event.text()
+        return bool(text.strip()) and text.isprintable() and not event.modifiers() & modifiers
+
+    def type_ahead(self, text: str) -> None:
+        """Bring the first entry starting with what was just typed to the front.
+
+        Repeating one letter ("sss") steps through the entries starting with it.
+        """
+        now = time.monotonic()
+        if now - self._typed_at > TYPE_AHEAD_SECONDS:
+            self._typed = ""
+        self._typed += text.lower()
+        self._typed_at = now
+        ring = self.current
+        if ring is None:
+            return
+
+        def matches(prefix: str) -> list[int]:
+            return [
+                i
+                for i, e in enumerate(ring.entries)
+                if not e.is_parent and e.name.lower().startswith(prefix)
+            ]
+
+        found = matches(self._typed)
+        if found:
+            self.bring_to_front(ring, found[0])
+            return
+        letter = self._typed[-1]
+        if self._typed == letter * len(self._typed) and (found := matches(letter)):
+            front = self._snap_front(ring)
+            later = [i for i in found if i > front]
+            self.bring_to_front(ring, later[0] if later else found[0])
+
+    def _snap_front(self, ring: Ring) -> int:
+        """The entry at the front once the current snap (if any) finishes."""
+        if self._snap_target is None or not ring.entries:
+            return ring.front_index() or 0
+        position = (math.pi / 2 - self._snap_target) / ring.step
+        return round(position) % len(ring.entries)
 
     def contextMenuEvent(self, event) -> None:
         pos = QPointF(event.pos())
@@ -663,8 +798,8 @@ class OrbitExplorer(QWidget):
         return font
 
     def _label_rect(self, item: ItemGeometry, is_front: bool) -> QRectF:
-        width = 90 + 80 * item.depth if is_front else 56 + 40 * item.depth
-        top = item.pos.y() + (item.size * 0.78 if is_front else item.size / 2) + 2
+        width = 90 + 80 * item.depth if is_front else 44 + 36 * item.depth
+        top = item.pos.y() + (item.size * 0.78 + 7 if is_front else item.size / 2 + 1)
         height = QFontMetricsF(self._label_font(item, is_front)).height() + 2
         return QRectF(item.pos.x() - width / 2, top, width, height)
 
@@ -680,13 +815,24 @@ class OrbitExplorer(QWidget):
         font.setPointSizeF(max(7.0, self.font().pointSizeF() - 1))
         painter.setFont(font)
         painter.setPen(QColor(t.text_muted))
+        metrics = QFontMetricsF(font)
         crumb = _shorten_path(self.current_path(), Path.home())
+        counter_width = metrics.horizontalAdvance(_counter_text(self.current) + "   ")
         painter.drawText(
             QRectF(8, 4, self.width() - 16, 18),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            QFontMetricsF(font).elidedText(crumb, Qt.TextElideMode.ElideMiddle, self.width() - 16),
+            metrics.elidedText(
+                crumb, Qt.TextElideMode.ElideMiddle, self.width() - 16 - counter_width
+            ),
         )
         current = self.current
+        counter = _counter_text(current)
+        if counter:
+            painter.drawText(
+                QRectF(8, 4, self.width() - 16, 18),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                counter,
+            )
         for ring in self.rings:
             if ring.alpha <= 0.01 or ring.scale <= 0.01:
                 continue
@@ -726,22 +872,19 @@ class OrbitExplorer(QWidget):
         labelled: set[int] = set()
         taken: list[QRectF] = []
         if ring.scale > 0.7:
+            # Front to back: a label may not cover another label or an icon nearer the viewer.
             for item in reversed(items):
-                rect = self._label_rect(item, is_front=item.index == front)
-                if any(rect.intersects(other) for other in taken):
+                if item.visibility < 0.5:
                     continue
-                taken.append(rect)
-                labelled.add(item.index)
+                rect = self._label_rect(item, is_front=item.index == front)
+                if not any(rect.intersects(other) for other in taken):
+                    taken.append(rect)
+                    labelled.add(item.index)
+                half = item.size * 0.34
+                taken.append(QRectF(item.pos.x() - half, item.pos.y() - half, 2 * half, 2 * half))
         for item in items:
             self._paint_item(
                 painter, item, ring, is_front=item.index == front, label=item.index in labelled
-            )
-        if ring.hidden_count and is_current:
-            painter.setPen(QColor(t.text_muted))
-            painter.drawText(
-                QRectF(centre.x() - 200, centre.y() + ry + 40, 400, 16),
-                Qt.AlignmentFlag.AlignCenter,
-                f"+{ring.hidden_count} more (use find_files or the terminal)",
             )
         if not is_current:
             painter.setPen(QColor(t.text_muted))
@@ -762,7 +905,7 @@ class OrbitExplorer(QWidget):
         t = self.theme
         size = item.size
         x, y = item.pos.x(), item.pos.y()
-        dim = 0.35 + 0.65 * item.depth
+        dim = (0.35 + 0.65 * item.depth) * item.visibility
         painter.setOpacity(ring.alpha * dim)
         hovered = ring is self.current and item.index == self._hover_index
         if item.entry.is_parent:
@@ -829,6 +972,18 @@ class OrbitExplorer(QWidget):
             )
             painter.drawText(rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, text)
         painter.setOpacity(ring.alpha)
+
+
+def _counter_text(ring: Ring | None) -> str:
+    """ "12 / 61" when the ring scrolls, plus the entries past MAX_ENTRIES that were left out."""
+    if ring is None or not ring.scrolls:
+        return ""
+    real = len(ring.entries) - (1 if ring.entries[0].is_parent else 0)
+    position = (ring.front_index() or 0) + (0 if ring.entries[0].is_parent else 1)
+    text = f"{position} / {real}" if position else f".. / {real}"
+    if ring.hidden_count:
+        text += f"  +{ring.hidden_count} not shown"
+    return text
 
 
 def file_manager_name() -> str:

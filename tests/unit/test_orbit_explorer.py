@@ -7,15 +7,17 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt  # noqa: E402
 from PySide6.QtGui import QMouseEvent, QWheelEvent  # noqa: E402
 
 from harness.config import Config  # noqa: E402
 from harness.ui.orbit_explorer import (  # noqa: E402
     HOVER_ZOOM,
     MAX_ENTRIES,
+    MAX_SLOTS,
     PARENT_SCALE,
     OrbitExplorer,
+    _counter_text,
 )
 
 
@@ -77,20 +79,69 @@ def test_front_item_and_rolling(explorer):
     assert ring.front_index() == 3
 
 
-def test_radius_grows_with_entries(qtbot, tmp_path):
-    small = OrbitExplorer(str(tmp_path), Config().ui.theme)
-    qtbot.addWidget(small)
+def test_big_directory_scrolls_through_a_fixed_ring(qtbot, tmp_path):
     for i in range(80):
         (tmp_path / f"f{i:03d}.txt").write_text("x")
     big = OrbitExplorer(str(tmp_path), Config().ui.theme)
     qtbot.addWidget(big)
-    assert big.current.rx > small.current.rx * 4
-    big.resize(300, 300)
+    ring = big.current
+    assert ring.slots == MAX_SLOTS and ring.scrolls
+    drawn = big.item_geometry(ring)
+    assert len(drawn) <= MAX_SLOTS + 1  # a window onto the directory, not all 81 entries
+    assert _counter_text(ring) == "1 / 80"
+    for _ in range(30):
+        big.step(1)
     big.settle()
-    # The ring is wider than the widget; most of it is off screen but the front is visible.
-    front = front_item(big)
-    assert 0 <= front.pos.x() <= 300
-    assert any(g.pos.x() < 0 or g.pos.x() > 300 for g in big.item_geometry(big.current))
+    assert ring.entries[ring.front_index()].name == "f030.txt"
+    assert _counter_text(ring) == "31 / 80"
+    assert abs(math.sin(ring.angle_of(ring.front_index())) - 1.0) < 1e-6
+    big.step(-32)  # past ".." wraps round to the end
+    big.settle()
+    assert ring.entries[ring.front_index()].name == "f079.txt"
+
+
+@pytest.mark.parametrize("size", [(320, 400), (300, 180), (700, 300), (220, 500)])
+def test_ring_and_front_label_fit_the_widget(qtbot, tmp_path, size):
+    for i in range(80):
+        (tmp_path / f"a_rather_long_file_name_{i:03d}.txt").write_text("x")
+    widget = OrbitExplorer(str(tmp_path), Config().ui.theme)
+    qtbot.addWidget(widget)
+    widget.resize(*size)
+    widget.settle()
+    bounds = QRectF(0, 0, *size)
+    front = front_item(widget)
+    assert bounds.contains(widget._label_rect(front, is_front=True).center())
+    assert widget._label_rect(front, is_front=True).bottom() <= size[1]
+    for item in widget.item_geometry(widget.current):
+        if item.visibility >= 0.5:
+            assert -item.size / 2 <= item.pos.x() <= size[0] + item.size / 2
+            assert 0 <= item.pos.y() <= size[1]
+
+
+def test_type_ahead_jumps_and_repeats_cycle(qtbot, tmp_path):
+    for name in ["alpha", "beta", "bravo", "charlie", "delta"]:
+        (tmp_path / name).write_text("x")
+    widget = OrbitExplorer(str(tmp_path), Config().ui.theme)
+    qtbot.addWidget(widget)
+    ring = widget.current
+
+    def front_name():
+        widget.settle()
+        return ring.entries[ring.front_index()].name
+
+    widget.type_ahead("c")
+    assert front_name() == "charlie"
+    widget.type_ahead("b")  # within the pause: "cb" matches nothing and is not a repeat
+    assert front_name() == "charlie"
+    widget._typed_at = 0.0  # a pause
+    widget.type_ahead("b")
+    assert front_name() == "beta"
+    widget.type_ahead("r")
+    assert front_name() == "bravo"
+    widget._typed_at = 0.0
+    widget.type_ahead("b")
+    widget.type_ahead("b")  # repeated letter: next entry starting with it
+    assert front_name() == "bravo"
 
 
 def test_drag_rolls_and_snaps(explorer):
@@ -144,14 +195,15 @@ def test_hover_zooms_towards_item(explorer):
             Qt.KeyboardModifier.NoModifier,
         )
     )
+    fit, focus = explorer.fit_zoom(ring), explorer._focus(ring)
     assert explorer._hover_index == item.index
-    assert explorer.camera.target_zoom == HOVER_ZOOM
-    assert explorer.camera.target_center.y() > ring.center.y()  # pulled towards the front item
+    assert explorer.camera.target_zoom == pytest.approx(fit * HOVER_ZOOM)
+    assert explorer.camera.target_center.y() > focus.y()  # pulled towards the front item
     explorer.settle()
     assert front_item(explorer).size > item.size
     explorer.leaveEvent(None)
     explorer.settle()
-    assert explorer.camera.zoom == 1.0 and explorer.camera.center == ring.center
+    assert explorer.camera.zoom == fit and explorer.camera.center == focus
 
 
 def test_expand_flies_camera_and_collapse_flies_back(explorer, tree):
@@ -163,19 +215,20 @@ def test_expand_flies_camera_and_collapse_flies_back(explorer, tree):
     assert explorer._flight is not None  # a flight is under way
     for _ in range(5):
         explorer._tick()
-    assert explorer.camera.zoom < 1.0  # the camera pulls back mid-flight
-    explorer.settle()
     child = explorer.current
+    assert explorer.camera.zoom < explorer.fit_zoom(child)  # the camera pulls back mid-flight
+    explorer.settle()
     assert child.path == str(tree / "src") and names(child) == ["..", "main.py", "util.py"]
     assert child.center != root.center  # the child lives somewhere else in the world
-    assert explorer.camera.center == child.center and explorer.camera.zoom == 1.0
+    assert explorer.camera.center == explorer._focus(child)
+    assert explorer.camera.zoom == explorer.fit_zoom(child)
     assert root.scale == PARENT_SCALE and child.scale == 1.0
     assert changed == [str(tree / "src")]
     explorer.go_up()
     assert explorer._flight is not None
     explorer.settle()
     assert explorer.current is root and root.scale == 1.0 and len(explorer.rings) == 1
-    assert explorer.camera.center == root.center
+    assert explorer.camera.center == explorer._focus(root)
 
 
 def test_child_direction_follows_the_clicked_item(explorer, tree):
