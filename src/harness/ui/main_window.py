@@ -143,7 +143,15 @@ class MainWindow(QMainWindow):
 
         explorer_root = str(Path(ui.file_explorer_root).expanduser())
         if ui.file_explorer == "orbit":
-            self.explorer = OrbitExplorer(explorer_root, self.theme, ui.file_explorer_show_hidden)
+            self.explorer = OrbitExplorer(
+                explorer_root,
+                self.theme,
+                ui.file_explorer_show_hidden,
+                mouse_roll=ui.file_explorer_mouse_roll,
+            )
+            self.explorer.mouse_roll_changed.connect(
+                lambda on: self.apply_preference("file_explorer_mouse_roll", on)
+            )
             self.explorer.file_selected.connect(self.composer.insert_text)
             self.explorer.reveal_requested.connect(
                 lambda path: self.perform_handoff(Handoff.file_manager(path))
@@ -389,7 +397,7 @@ class MainWindow(QMainWindow):
 
     # -- preferences -------------------------------------------------------------------
 
-    def apply_preference(self, name: str, value: str) -> str | None:
+    def apply_preference(self, name: str, value: str | bool) -> str | None:
         """Change a preference now and persist it to the config file. Returns an error or None."""
         if name == "critter":
             if value not in CRITTERS:
@@ -398,6 +406,11 @@ class MainWindow(QMainWindow):
             self.status_strip.critter.set_kind(value)
             for kind, action in self._critter_actions.items():
                 action.setChecked(kind == value)
+        elif name == "file_explorer_mouse_roll":
+            value = value if isinstance(value, bool) else str(value).lower() in ("true", "on", "1")
+            self.config.ui.file_explorer_mouse_roll = value
+            if isinstance(self.explorer, OrbitExplorer) and self.explorer.mouse_roll != value:
+                self.explorer.set_mouse_roll(value)
         else:
             return f"unknown preference {name!r}"
         try:

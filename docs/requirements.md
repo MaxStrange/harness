@@ -156,7 +156,7 @@ Security has two main surfaces: terminal commands, and web traffic coming in and
 - Moving the mouse rolls the circle left or right.
 - Expanding a directory smoothly moves it off to the side and shrinks it and its siblings, while its children come into view and grow to full size.
 
-Inspiration is the Screenvader site featured on The FWA about 20 years ago (built in Flash and no longer working).
+Inspiration is Screenvader, Stéphane Bourez's Flash portfolio site, featured on The FWA as FWA of the Day on 10 December 2005 (no longer working). Adam Shailer's study of it, https://www.adasha.com/lab/layouts/vader/, shows its mouse lens and depth-of-field blur.
 
 **UI4. Chat sessions (bottom right).** A panel listing saved chat sessions.
 

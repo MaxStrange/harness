@@ -378,6 +378,8 @@ class UiConfig(StrictModel):
     file_explorer_root: str = "~"
     file_explorer: Literal["orbit", "tree"] = "orbit"
     file_explorer_show_hidden: bool = False
+    # Holding the cursor towards either side of the orbiting explorer rolls the ring.
+    file_explorer_mouse_roll: bool = True
     critter: Literal["lizard", "turtle", "sloth", "dinosaur", "songbird"] = "lizard"
 
     @field_validator("file_explorer_root")
