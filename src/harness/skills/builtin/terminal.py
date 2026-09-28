@@ -87,6 +87,12 @@ class TerminalSkill(Skill):
             return SkillResult.fail(
                 f"command was cancelled by the user. Output so far:\n{output}", handoff
             )
+        if result.paged:
+            output += (
+                "\n(The command opened a pager, which the harness closed; the output above may "
+                "be only the first screen. Pipe through `cat` or use a no-pager option, e.g. "
+                "`git --no-pager ...`.)"
+            )
         return SkillResult(
             f"exit code: {result.exit_code}\n{output}",
             handoff,

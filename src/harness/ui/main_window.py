@@ -129,6 +129,7 @@ class MainWindow(QMainWindow):
             self.side_panel.addWidget(view)
         self.side_panel.setVisible(False)
 
+        self._approval_skills: dict[str, str] = {}  # approval id -> skill, for the status
         self.chat = ChatView(ui, self.perform_handoff, self._resolve_approval)
         self.composer = Composer(self._session_cwd)
         self.composer.send_requested.connect(self.send_message)
@@ -352,6 +353,13 @@ class MainWindow(QMainWindow):
             for e in self.core.store.skill_events(session_id)
         }
         self.chat.load_transcript(self.agent.session.messages, events)
+        self.composer.set_history(
+            [
+                m.content
+                for m in self.agent.session.messages
+                if m.role == "user" and m.content and not _is_synthetic_user_message(m.content)
+            ]
+        )
         self.task_view.set_session(session_id)
         self.sessions.set_current(session_id, self.agent.session.project_id)
         project = self.core.store.get_project(self.agent.session.project_id)
@@ -587,6 +595,7 @@ class MainWindow(QMainWindow):
             log.warning("status: %s", text)
 
     def _on_approval_needed(self, pending) -> None:
+        self._approval_skills[pending.id] = pending.request.skill
         self.chat.on_approval_needed(pending)
         self.turn_status.setText("Waiting for your approval")
         self.status_strip.set_status("Waiting for your approval")
@@ -594,7 +603,17 @@ class MainWindow(QMainWindow):
             self.show_notification("Approval needed", pending.request.title)
 
     def _resolve_approval(self, approval_id: str, decision: ApprovalDecision) -> bool:
-        return self.core.broker.resolve(approval_id, decision)
+        resolved = self.core.broker.resolve(approval_id, decision)
+        skill = self._approval_skills.pop(approval_id, None)
+        if resolved:
+            # The approval card was the last thing to set the status; say what happens now.
+            if decision.approved:
+                text = f"Running {skill}..." if skill else "Running..."
+            else:
+                text = "Denied; the model is told why"
+            self.turn_status.setText(text)
+            self.status_strip.set_status(text)
+        return resolved
 
     def _on_skill_started(self, call_id: str, skill: str, args: dict) -> None:
         self.chat.on_skill_started(call_id, skill, args)
@@ -772,3 +791,10 @@ class MainWindow(QMainWindow):
         for name in self.terminal_panel.names():
             self.terminal_panel.remove_session(name)
         super().closeEvent(event)
+
+
+def _is_synthetic_user_message(content: str) -> bool:
+    """User-role messages the harness wrote (compaction summaries, text-mode tool results)."""
+    from harness.model.compaction import SUMMARY_PREFIX
+
+    return content.startswith(SUMMARY_PREFIX) or content.startswith("[Result of ")
