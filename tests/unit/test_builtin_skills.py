@@ -291,6 +291,34 @@ def test_git_inspect(registry, world):
     )
     (project / "main.py").write_text("changed\n")
     assert "-import os" in run(registry, world, "git_inspect", action="diff").result.content
+
+    def git(*args):
+        subprocess.run(
+            ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=project, check=True
+        )
+
+    # diff against a branch or a range, not only a file (a branch name used to be read as a path)
+    git("branch", "-q", "-M", "main")
+    git("switch", "-q", "-c", "feature")  # the uncommitted main.py edit comes along, uncommitted
+    (project / "feature.txt").write_text("feature line\n")
+    git("add", "feature.txt")
+    git("commit", "-q", "-m", "feature work")
+    git("switch", "-q", "main")
+    by_branch = run(registry, world, "git_inspect", action="diff", target="feature")
+    assert "$ git diff feature" in by_branch.result.content
+    content = by_branch.result.content  # the working tree vs the feature branch
+    assert "+changed" in content and "-feature line" in content
+    by_range = run(registry, world, "git_inspect", action="diff", target="main...feature")
+    assert "+feature line" in by_range.result.content  # what feature adds since it forked
+    assert "changed" not in by_range.result.content
+    by_file = run(registry, world, "git_inspect", action="diff", target="main.py")
+    assert "$ git diff -- main.py" in by_file.result.content
+    merged = run(registry, world, "git_inspect", action="merged", target="feature")
+    assert "main" in merged.result.content and "feature" in merged.result.content
+    # A target can never become an option (git log --output=<file> would write a file).
+    injected = run(registry, world, "git_inspect", action="log", target="--output=pwned.txt")
+    assert not injected.result.ok and "looks like an option" in injected.result.content
+    assert not (project / "pwned.txt").exists()
     assert (
         "git exited"
         in run(
