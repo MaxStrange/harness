@@ -11,6 +11,7 @@ import collections
 import importlib.resources
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -33,12 +34,24 @@ Subscriber = Callable[[bytes], None]
 SCROLLBACK_BYTES = 2_000_000
 
 
+PAGER_QUIET_S = 1.5  # output this quiet, ending in a pager prompt, means a pager is waiting
+PAGER_LINE = re.compile(r"^[ \t]*(:|\(END\)|--More--.*|lines \d+-\d+.*)[ \t]*$", re.MULTILINE)
+
+
+def looks_like_pager(tail: bytes) -> bool:
+    """Whether captured output ends in a pager's prompt (less ':' or '(END)', more '--More--')."""
+    text = strip_escapes(tail.decode("utf-8", errors="replace")).replace("\r", "\n")
+    lines = [line for line in text.split("\n") if line.strip()]
+    return bool(lines) and bool(PAGER_LINE.match(lines[-1]))
+
+
 @dataclass
 class CommandResult:
     output: str
     exit_code: int | None
     timed_out: bool = False
     cancelled: bool = False
+    paged: bool = False  # a pager (less, more) stopped for a key and was closed
 
     @property
     def ok(self) -> bool:
@@ -95,6 +108,10 @@ class TerminalSession:
         self._env = dict(env or os.environ)
         self._env.setdefault("TERM", "xterm-256color")
         self._env["HARNESS_SESSION"] = name
+        # Commands the model runs cannot answer a pager: `git branch` in a terminal opens
+        # less and waits for a key forever. Print straight through instead.
+        self._env["GIT_PAGER"] = "cat"
+        self._env["PAGER"] = "cat"
         self._pty: PtyProcess | None = None
         self._reader: threading.Thread | None = None
         self._subscribers: list[Subscriber] = []
@@ -258,31 +275,48 @@ class TerminalSession:
                 self._last_exit = None
             self.write(wrapped + ("\r" if self.shell_kind == "powershell" else "\n"))
             deadline = time.monotonic() + timeout
-            timed_out = cancelled = False
+            timed_out = cancelled = paged = False
+            seen, quiet_since = 0, time.monotonic()
             with self._cond:
                 while True:
                     finished = (not self._pending and not self._capturing) or self.closed
                     if finished:
                         break
-                    remaining = deadline - time.monotonic()
+                    now = time.monotonic()
+                    remaining = deadline - now
                     if remaining <= 0:
                         timed_out = True
                         break
                     if cancel is not None and cancel.cancelled:
                         cancelled = True
                         break
+                    if len(self._capture) != seen:
+                        seen, quiet_since = len(self._capture), now
+                    elif (
+                        not paged
+                        and now - quiet_since > PAGER_QUIET_S
+                        and looks_like_pager(bytes(self._capture[-400:]))
+                    ):
+                        # A pager is waiting for a key nobody will press: quit it.
+                        paged = True
+                        self.write("q")
                     self._cond.wait(min(0.1, remaining))
                 output = bytes(self._capture)
                 exit_code = self._last_exit
             if timed_out or cancelled:
+                if looks_like_pager(output[-400:]):
+                    self.write("q")  # Ctrl+C does not get out of less
+                    time.sleep(0.2)
                 self.interrupt()
                 with self._cond:
                     self._pending = False
                     self._capturing = False
             text = strip_escapes(output.decode("utf-8", errors="replace"))
             text = text.replace("\r\n", "\n").replace("\r", "\n")
+            if paged:
+                text = PAGER_LINE.sub("", text)
             return CommandResult(
-                text.strip("\n"), exit_code, timed_out=timed_out, cancelled=cancelled
+                text.strip("\n"), exit_code, timed_out=timed_out, cancelled=cancelled, paged=paged
             )
         finally:
             self._command_lock.release()

@@ -215,3 +215,47 @@ def test_terminal_skill_changes_directory_per_shell():
     assert _in_dir(r"C:\it's", "dir", "powershell") == (
         r"Set-Location -LiteralPath 'C:\it''s'; if ($?) { dir }"
     )
+
+
+def test_looks_like_pager():
+    from harness.terminal.session import looks_like_pager
+
+    assert looks_like_pager(b"a\r\nb\r\n:")
+    assert looks_like_pager(b"line\n\x1b[7m(END)\x1b[27m")
+    assert looks_like_pager(b"text\n--More--(42%)")
+    assert not looks_like_pager(b"key: value")
+    assert not looks_like_pager(rb"PS C:\> ")
+    assert not looks_like_pager(b"")
+
+
+def _git_repo(path, commits: int):
+    import subprocess
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True)
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    for i in range(commits):
+        git("commit", "-q", "--allow-empty", "-m", f"commit {i}")
+
+
+@powershell_only
+@pytest.mark.skipif(not shutil.which("git"), reason="needs git")
+def test_real_powershell_git_output_is_not_paged(tmp_path):
+    _git_repo(tmp_path, 60)
+    session = TerminalSession("t", "powershell.exe", str(tmp_path))
+    session.start()
+    try:
+        assert session.wait_for_prompt(30)
+        assert session.run_command("$env:GIT_PAGER", timeout=20).output == "cat"
+        result = session.run_command("git log --oneline", timeout=30)
+        assert result.exit_code == 0 and not result.paged
+        assert "commit 0" in result.output and "commit 59" in result.output  # all of it
+        # A pager that slips through anyway (here forced back on) is quit, not waited for.
+        forced = session.run_command("$env:GIT_PAGER = 'less'; git log --oneline", timeout=60)
+        assert forced.paged and not forced.timed_out and "commit 59" in forced.output
+        assert session.run_command("echo back", timeout=20).output == "back"
+    finally:
+        session.close()
