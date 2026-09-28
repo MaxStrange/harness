@@ -20,7 +20,8 @@ terminal/         markers (OSC 7331 capture), pty backends, TerminalSession, man
                   shell/ init scripts, web/ xterm.js page
 agent/            SQLite store with FTS5, system prompt, the agent loop
 ui/               Qt: theme, markdown, handoff execution, thread bridges, widgets, main window;
-                  orbit_explorer.py is UI3 (rings of icons seen edge-on), file_explorer.py the tree fallback
+                  orbit_explorer.py is UI3 (rings of icons seen edge-on, a mouse lens
+                  with depth-of-field blur after Stéphane Bourez's Screenvader, mouse roll at the sides), file_explorer.py the tree fallback
 cli.py            the `harness` command
 ```
 

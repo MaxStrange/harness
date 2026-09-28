@@ -466,6 +466,26 @@ def test_critter_menu_and_skill_change_the_sprite(qtbot, window, harness_home):
     assert win._critter_actions["songbird"].isChecked()
 
 
+def test_explorer_mouse_roll_preference(qtbot, window, harness_home):
+    win, model, core = window
+    from harness.config import load_config
+
+    load_config(harness_home)
+    assert win.explorer.mouse_roll is True
+    win.explorer.mouse_roll_changed.emit(False)  # the explorer's menu toggle
+    assert win.config.ui.file_explorer_mouse_roll is False
+    assert "file_explorer_mouse_roll: false" in harness_home.config_file.read_text()
+    model.script += [
+        FakeModel.tool_call(
+            "harness_settings", action="set", setting="file_explorer_mouse_roll", value="true"
+        ),
+        "Done.",
+    ]
+    win.send_message("let the explorer roll with the mouse again")
+    wait_turn(qtbot, win)
+    assert win.explorer.mouse_roll is True and win.config.ui.file_explorer_mouse_roll is True
+
+
 def test_moving_into_a_project_adopts_its_root(qtbot, window, tmp_path):
     win, model, core = window
     root = tmp_path / "repos" / "harness"

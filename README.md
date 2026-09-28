@@ -122,6 +122,15 @@ harness --reset-sessions     # asks for confirmation; config, logs and skills ar
 Deleting the whole `~/.harness/` folder is the full factory reset (the next launch rewrites the
 default config; keep a copy of `config.yml` and `secrets/` if you want them back).
 
+## Credits
+
+The orbiting file explorer is inspired by [Screenvader](https://thefwa.com/cases/screenvader),
+the Flash portfolio of **Stéphane Bourez** (FWA of the Day, 10 December 2005), whose 3D menu
+brought items in and out of focus around the mouse. Its lens and depth-of-field effect follow
+**Adam Shailer's** ([Adasha](https://www.adasha.com/)) study of that interface,
+[screenvader](https://www.adasha.com/lab/layouts/vader/). The harness reimplements the idea in Qt;
+no code from either is included.
+
 ## Tests
 
 ```bash
