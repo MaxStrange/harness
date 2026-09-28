@@ -13,6 +13,7 @@ from pathlib import Path
 from harness.agent.store import SessionStore
 from harness.config import Config
 from harness.model.roles import RoleClient
+from harness.model.stack import ModelStack
 from harness.model.summarizer import Summarizer
 from harness.model.web_reader import WebReader
 from harness.paths import HarnessPaths
@@ -44,9 +45,12 @@ class HarnessCore:
     terminals: TerminalManager
     jobs: BackgroundJobs
     task_lists: TaskListStore
+    stack: ModelStack | None = None
 
     def shutdown(self) -> None:
         self.runner.shutdown()
+        if self.stack is not None:
+            self.stack.close()
         self.terminals.close_all()
         self.store.close()
 
@@ -102,6 +106,7 @@ def build_core(
     terminals = TerminalManager(config.terminal)
     jobs = BackgroundJobs(terminals)
     task_lists = TaskListStore()
+    stack = ModelStack(config.models.stack) if config.models.stack.enabled else None
     services = Services(
         path_policy=path_policy,
         net_policy=net_policy,
@@ -116,6 +121,7 @@ def build_core(
         ui=ui or RecordingUi(),
         task_lists=task_lists,
         background_jobs=jobs,
+        stack=stack,
     )
 
     registry = SkillRegistry()
@@ -151,4 +157,5 @@ def build_core(
         terminals,
         jobs,
         task_lists,
+        stack,
     )

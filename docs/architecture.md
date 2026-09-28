@@ -10,7 +10,8 @@ paths.py          ~/.harness layout (HARNESS_HOME overrides)
 bootstrap.py      build_core(): wires models, policies, skills, store, terminals
 
 model/            types, OpenAI-compatible streaming client (native + text tool calls), role
-                  clients with endpoint failover, summarizer, web reader, compaction, fake model
+                  clients with endpoint failover, summarizer, web reader, compaction, fake model,
+                  stack.py: what is resident on the model machine and swapping it for skills
 security/         path policy (deny list, untrusted dirs), net policy (no private addresses)
 web/              safe fetcher (checked redirects, no cookies, size cap), HTML->text, SearXNG
 skills/           the contract (base.py), discovery (registry.py), execution (runner.py),
@@ -49,6 +50,12 @@ cli.py            the `harness` command
    in the audit log and the UI), and the result is appended as a `tool` message.
 4. Back to 2 until the model answers without tool calls (or `MAX_TOOL_ROUNDS`).
 
+A generation skill calls `ModelStack.acquire([...])`, which may unload router models (even the
+main one) to make room. Before step 2 runs again, and at the end of every turn, the agent calls
+`ModelStack.restore()`, which reloads what was unloaded, making room only by unloading what the
+skill loaded. So the main model always gets the skill's result with the stack it started with.
+Planning (`stack.plan`) is a pure function over the declared sizes in `models.stack`.
+
 ## Terminal capture (P10, P11a)
 
 bash starts with `--rcfile shell/harness.bashrc`, which sources the user's `~/.bashrc` and sets
@@ -82,9 +89,12 @@ before the bytes reach xterm.js.
 
 ## Next steps
 
-- Generation skills, deferred until the models are chosen: 2D image / animation generation (the
-  embedded image viewer already shows results) and 3D model generation with an embedded viewer.
-  Each is one skill file plus, for 3D, a new embedded view (see "Extending").
+- An embedded 3D viewer for `generate_3d_model` (today: a rendered preview in the image viewer
+  and the GLB handed to the default app), textured meshes (Hunyuan's texture stage needs a CUDA
+  rasterizer ported to ROCm), and animation generation.
+- The stack serialises swaps within one harness, but a second session calling the main model
+  while a skill has it unloaded makes the router load it again; a lease across sessions would
+  close that.
 
 - Keyboard navigation across panels, better skill-result rendering (tables, images).
 - Session export, memory across sessions (SH3, later).

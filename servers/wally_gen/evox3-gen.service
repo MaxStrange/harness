@@ -1,0 +1,21 @@
+[Unit]
+Description=Image (FLUX.1-schnell) and 3D (Hunyuan3D-2mini) generation service
+Documentation=file:///home/max/gen/server.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=max
+SupplementaryGroups=render video
+WorkingDirectory=/home/max/gen
+Environment=HF_HOME=/home/max/models/huggingface
+Environment=HF_HUB_OFFLINE=1
+Environment=U2NET_HOME=/home/max/gen/u2net
+Environment=GEN_IDLE_UNLOAD_S=600
+ExecStart=/home/max/venvs/gen/bin/python -m uvicorn server:app --host 0.0.0.0 --port 18083
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

@@ -106,6 +106,12 @@ def stack_check(config_path: Path | None) -> int:
         print(f"searxng: online ({len(results)} result(s) for a test query)")
     except SearchError as exc:
         print(f"searxng: OFFLINE - {exc}")
+    if config.models.stack.enabled:
+        from harness.model.stack import ModelStack
+
+        stack = ModelStack(config.models.stack)
+        print(f"model stack: {stack.describe()}")
+        stack.close()
     return 1 if failures else 0
 
 

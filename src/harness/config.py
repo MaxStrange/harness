@@ -138,10 +138,66 @@ class WebReaderConfig(StrictModel):
     max_input_chars: int = Field(default=60000, gt=0)
 
 
+GEN_SERVICE_URL = "http://10.0.0.228:18083"
+
+
+class StackComponent(StrictModel):
+    """One thing that occupies memory on the model machine and can be loaded and unloaded."""
+
+    # router: a model of the llama.cpp router (name = its model id);
+    # service: a component of a generation service with /health, /load and /unload.
+    kind: Literal["router", "service"]
+    name: str
+    url: str = Field(description="router: its base URL (with or without /v1); service: its URL")
+    api_key_file: str | None = None
+    gib: float = Field(gt=0, description="resident memory, measured")
+    # Higher = unloaded last to make room, reloaded first afterwards.
+    priority: int = 0
+    # Runs alone: every other component is unloaded while it is loaded.
+    exclusive: bool = False
+    load_timeout_s: float = Field(default=600, gt=0)
+
+    @field_validator("url")
+    @classmethod
+    def _check_url(cls, value: str) -> str:
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("must start with http:// or https://")
+        value = value.rstrip("/")
+        return value[: -len("/v1")] if value.endswith("/v1") else value
+
+    @field_validator("api_key_file")
+    @classmethod
+    def _expand_key_file(cls, value: str | None) -> str | None:
+        return _expand(value)
+
+
+def _default_components() -> dict[str, StackComponent]:
+    router = LLM_ROUTER_URL
+    key = _default_api_key_file()
+    return {
+        "main": StackComponent(
+            kind="router", name="gpt-oss-120b", url=router, api_key_file=key, gib=70, priority=100
+        ),
+        "summarizer": StackComponent(
+            kind="router", name="qwen3-coder-30b", url=router, api_key_file=key, gib=35, priority=50
+        ),
+        "image": StackComponent(kind="service", name="image", url=GEN_SERVICE_URL, gib=42),
+        "mesh": StackComponent(kind="service", name="mesh", url=GEN_SERVICE_URL, gib=9),
+    }
+
+
+class StackConfig(StrictModel):
+    enabled: bool = True
+    # What may be resident at once on the model machine, in GiB.
+    budget_gib: float = Field(default=114, gt=0)
+    components: dict[str, StackComponent] = Field(default_factory=_default_components)
+
+
 class ModelsConfig(StrictModel):
     main: MainModelConfig = Field(default_factory=MainModelConfig)
     summarizer: SummarizerConfig = Field(default_factory=SummarizerConfig)
     web_reader: WebReaderConfig = Field(default_factory=WebReaderConfig)
+    stack: StackConfig = Field(default_factory=StackConfig)
 
 
 class WebConfig(StrictModel):

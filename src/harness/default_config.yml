@@ -63,6 +63,52 @@ models:
     max_tokens: 2048
     max_input_chars: 60000      # web pages are truncated to this before reading
 
+  # What is resident on the model machine. Generation skills (image, 3D) need
+  # memory the LLMs are using, so before one runs the harness unloads just
+  # enough to fit it (lowest priority first), runs the skill, and loads what it
+  # unloaded again before the main model continues with the result.
+  # gib values were measured on the EVO X3 (weights + preallocated KV cache).
+  stack:
+    enabled: true
+    budget_gib: 114             # GTT is 120 GiB; keep a little for the desktop
+    components:
+      main:
+        kind: router            # a model of the llama.cpp router
+        name: gpt-oss-120b
+        url: http://10.0.0.228:18080
+        api_key_file: ~/.harness/secrets/llama-api-key
+        gib: 70
+        priority: 100           # unloaded last, reloaded first
+        exclusive: false        # true = unload everything else while this is loaded
+        load_timeout_s: 600
+      summarizer:               # also the web reader: the same model
+        kind: router
+        name: qwen3-coder-30b
+        url: http://10.0.0.228:18080
+        api_key_file: ~/.harness/secrets/llama-api-key
+        gib: 35
+        priority: 50
+        exclusive: false
+        load_timeout_s: 600
+      image:                    # FLUX.1-schnell in the generation service on the LLM machine
+        kind: service
+        name: image
+        url: http://10.0.0.228:18083
+        api_key_file: null
+        gib: 42                 # 31 loaded, 42 at peak while generating 1024x1024
+        priority: 0
+        exclusive: false
+        load_timeout_s: 600
+      mesh:                     # Hunyuan3D-2mini (image -> 3D) in the same service
+        kind: service
+        name: mesh
+        url: http://10.0.0.228:18083
+        api_key_file: null
+        gib: 9
+        priority: 0
+        exclusive: false
+        load_timeout_s: 600
+
 web:
   searxng_url: http://10.0.0.228:18082   # the only search backend; no fallback
   # Hosts on the private network that web skills may talk to. One host at a time,

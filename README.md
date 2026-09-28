@@ -14,7 +14,8 @@ Milestones 1 and 2 are implemented, plus most of milestone 3's skills:
   `ui.file_explorer: tree` as a plain fallback) and sessions panel with full-text search.
 - Model bring-up: streaming, native or text tool calling, stop, automatic and manual compaction,
   offline status without losing sessions.
-- All twenty skills from the requirements, each with its handoff, plus `kicad_inspect` (schematic
+- All twenty skills from the requirements, each with its handoff, plus `generate_image` and
+  `generate_3d_model` (with model swapping on the LLM machine), `kicad_inspect` (schematic
   hierarchy, BOM, board, nets straight from KiCad files), `directory_tree` (a tree a few levels
   deep with big folders summarized) and `harness_settings` (ask the model to change the sprite).
 - Security: command approval with summarizer, protected paths, private-network blocking, web reader
@@ -58,6 +59,18 @@ back to the LLM machine (M2), and one server can fill several roles while you ex
 The server's API key goes in its own file, not in the config: put it on the first line of
 `~/.harness/secrets/llama-api-key` (the default `api_key_file` of every endpoint). The model skills
 may not read `~/.harness/secrets`, and `harness --check-config` reports a missing or empty key file.
+
+### Generation skills and model swapping
+
+`generate_image` (FLUX.1-schnell) and `generate_3d_model` (Hunyuan3D-2mini, from an image or a
+prompt) run in a generation service on the LLM machine; see
+[servers/wally_gen/README.md](servers/wally_gen/README.md) for installing it. The LLMs already use
+most of that machine's memory, so `models.stack` in the config lists everything that can be
+resident, with its measured size and a budget. Before a generation skill runs, the harness unloads
+just enough to fit it, lowest `priority` first (the summarizer before the main model; the whole
+stack if the job is big enough, or if the component is marked `exclusive`), loads it, runs the job,
+and reloads what it unloaded before the main model sees the result. The status line shows each
+step. `harness --stack-check` prints what is loaded now.
 
 ## Checking the stack
 
