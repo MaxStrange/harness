@@ -11,9 +11,14 @@ Rings live in a world; a camera looks at it. Expanding a directory puts the
 children's ring somewhere off to the side of the parent (in the direction of
 the clicked item) and flies the camera there, like hopping between star
 systems; the parent shrinks and stays where it was, so going back is a flight
-too. Hovering an item zooms the camera towards it. The wheel, touchpad scroll
-gestures, a horizontal drag and the arrow keys roll the ring, which snaps to
-the nearest item when it stops. Typing a name brings the first match to the front.
+too. The wheel, touchpad scroll gestures, a horizontal drag and the arrow keys
+roll the ring, which snaps to the nearest item when it stops; with mouse roll
+on, holding the cursor towards either side rolls it too. Typing a name brings
+the first match to the front.
+
+The mouse is a lens, after Adasha's Screenvader study: icons near the cursor
+grow and are pushed apart, and icons blur with their distance from the
+cursor and towards the back of the ring, like a camera's depth of field.
 
 The widget exposes the same interface as the tree stub (``set_root``,
 ``reveal``, ``root``, ``open_requested``, ``cwd_requested``) so the main window
@@ -26,6 +31,7 @@ import math
 import os
 import sys
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -39,6 +45,7 @@ from PySide6.QtGui import (
     QPainter,
     QPainterPath,
     QPen,
+    QPixmap,
     QWheelEvent,
 )
 from PySide6.QtWidgets import QMenu, QWidget
@@ -61,8 +68,22 @@ MIN_FIT_ZOOM = 0.45  # the fitted zoom never goes below this; tiny widgets clip 
 TYPE_AHEAD_SECONDS = 1.0  # a pause this long starts a new type-to-jump prefix
 PARENT_SCALE = 0.55  # a ring you came from shrinks to this
 PARENT_ALPHA = 0.55
-HOVER_ZOOM = 1.28  # camera zoom when an item is under the mouse
-HOVER_PULL = 0.5  # how far the camera moves towards a hovered item (0..1)
+LENS_RADIUS = 150.0  # px: icons closer than this to the cursor are magnified and pushed
+LENS_PUSH = 0.55  # at the cursor, an icon moves away by this fraction of its distance
+LENS_GROW = 0.6  # at the cursor, an icon grows by this fraction
+LENS_EASE = 0.2  # per tick, the lens fading in and out as the mouse enters and leaves
+BLUR_MAX_PX = 5.0  # px of blur at full depth of field (at an icon size of ICON_FRONT)
+BLUR_LEVELS = 5  # blurred copies of each icon kept in the cache
+BLUR_BACK = 0.55  # blur at the very back of the ring
+BLUR_START = 45.0  # px from the cursor where the focus starts to go soft
+BLUR_RUNOFF = 140.0  # px over which it goes fully soft
+BLUR_PARENT = 0.7  # rings you came from are out of focus
+BLUR_CURSOR = 0.65  # most blur the cursor's distance alone causes
+BLUR_FRONT = 0.25  # the front item (what Enter opens) never gets softer than this
+ROLL_ZONE = 0.55  # mouse roll starts this far from the centre (fraction of the half-width)
+ROLL_MAX = 5.0  # slots per second at the very edge
+ROLL_OVER_ITEM = 0.3  # roll speed factor while the cursor is on an icon, so it can be clicked
+ICON_CACHE_SIZE = 600  # rendered icons kept
 FLIGHT_SECONDS = 0.55
 FLIGHT_DIP = 0.28  # the camera zooms out this much mid-flight
 WHEEL_STEP_DEGREES = 15.0  # one wheel notch = one item
@@ -162,6 +183,8 @@ class ItemGeometry:
     size: float  # screen
     depth: float  # 0 = back, 1 = front
     visibility: float = 1.0  # fades to 0 at the back seam of a scrolling ring
+    blur: float = 0.0  # depth of field: 0 sharp .. 1 fully soft
+    magnified: float = 0.0  # how strongly the lens acts on it: 0 .. 1
 
 
 @dataclass
@@ -184,16 +207,29 @@ class OrbitExplorer(QWidget):
     reveal_requested = Signal(str)  # show this path in the system file manager
     directory_changed = Signal(str)
 
-    def __init__(self, root: str, theme: ThemeConfig, show_hidden: bool = False) -> None:
+    mouse_roll_changed = Signal(bool)  # the user toggled mouse roll in the menu
+
+    def __init__(
+        self,
+        root: str,
+        theme: ThemeConfig,
+        show_hidden: bool = False,
+        mouse_roll: bool = True,
+    ) -> None:
         super().__init__()
         self.theme = theme
         self.show_hidden = show_hidden
+        self.mouse_roll = mouse_roll
+        self._mouse: QPointF | None = None  # the cursor, while it is over the widget
+        self._lens = 0.0  # current lens strength, eased towards 1 while the mouse is in
+        self._icons: OrderedDict[tuple, QPixmap] = OrderedDict()
         self.rings: list[Ring] = []
         self.camera = Camera()
         self._root = root
         self._hover_index: int | None = None
         self._snap_target: float | None = None
-        self._flight: tuple[QPointF, QPointF, float] | None = None  # from, to, progress
+        # from, to, zoom from, zoom to, progress
+        self._flight: tuple[QPointF, QPointF, float, float, float] | None = None
         self._wheel_accum = 0.0
         self._press_pos: QPointF | None = None
         self._drag_last_x: float | None = None
@@ -399,26 +435,20 @@ class OrbitExplorer(QWidget):
         )
 
     def _aim_camera(self) -> None:
-        """Camera target from the hover state (not during a flight)."""
+        """Camera target: the current ring, fitted (not during a flight). Hover is the lens's job."""
         ring = self.current
         if ring is None or self._flight is not None:
             return
-        focus, zoom = self._focus(ring), self.fit_zoom(ring)
-        if self._hover_index is not None and self._hover_index < len(ring.entries):
-            item = ring.world_pos(self._hover_index)
-            self.camera.target_center = QPointF(
-                focus.x() + (item.x() - ring.center.x()) * HOVER_PULL,
-                focus.y() + (item.y() - ring.center.y()) * HOVER_PULL,
-            )
-            self.camera.target_zoom = zoom * HOVER_ZOOM
-        else:
-            self.camera.target_center = focus
-            self.camera.target_zoom = zoom
+        self.camera.target_center = self._focus(ring)
+        self.camera.target_zoom = self.fit_zoom(ring)
 
     # -- geometry -------------------------------------------------------------------
 
     def item_geometry(self, ring: Ring) -> list[ItemGeometry]:
+        """Where each visible item of ``ring`` is drawn, lens and depth of field applied."""
         zoom = self.camera.zoom
+        is_current = ring is self.current
+        mouse = self._mouse if (is_current and self._lens > 0.0) else None
         items = []
         for i, entry in enumerate(ring.entries):
             visibility = ring.visibility(i)
@@ -429,7 +459,27 @@ class OrbitExplorer(QWidget):
                 ICON_FRONT * ring.scale * zoom * (ICON_BACK_FACTOR + (1 - ICON_BACK_FACTOR) * depth)
             )
             pos = self.to_screen(ring.world_pos(i))
-            items.append(ItemGeometry(entry, i, pos, size, depth, visibility))
+            blur = BLUR_BACK * (1 - depth) if is_current else BLUR_PARENT
+            magnified = 0.0
+            if mouse is not None:
+                dx, dy = pos.x() - mouse.x(), pos.y() - mouse.y()
+                distance = math.hypot(dx, dy)
+                magnified = _smoothstep(1 - distance / LENS_RADIUS) * self._lens
+                pos = QPointF(
+                    pos.x() + dx * magnified * LENS_PUSH, pos.y() + dy * magnified * LENS_PUSH
+                )
+                size *= 1 + LENS_GROW * magnified
+                soft = _smoothstep((distance - BLUR_START) / BLUR_RUNOFF) * self._lens * BLUR_CURSOR
+                blur = max(blur * (1 - magnified), soft)
+            item = ItemGeometry(entry, i, pos, size, depth, visibility, blur, magnified)
+            items.append(item)
+        if is_current:
+            front = ring.front_index()
+            for item in items:
+                if item.index == self._hover_index:
+                    item.blur = 0.0  # what you point at is always in focus
+                elif item.index == front:
+                    item.blur = min(item.blur, BLUR_FRONT)
         return items
 
     def item_at(self, pos: QPointF) -> tuple[Ring, ItemGeometry] | None:
@@ -437,7 +487,7 @@ class OrbitExplorer(QWidget):
         ring = self.current
         if ring is None:
             return None
-        for item in sorted(self.item_geometry(ring), key=lambda g: -g.depth):
+        for item in sorted(self.item_geometry(ring), key=lambda g: -_z(g)):
             if item.visibility < 0.5:
                 continue
             half = item.size / 2 + 4
@@ -491,13 +541,59 @@ class OrbitExplorer(QWidget):
         if not self._timer.isActive():
             self._timer.start()
 
+    def mouse_roll_speed(self) -> float:
+        """Slots per second the cursor asks for: 0 in the middle, rising towards either side.
+
+        Positive rolls the entries on the right towards the front.
+        """
+        if not self.mouse_roll or self._mouse is None or self._dragging or self.width() <= 0:
+            return 0.0
+        if self._flight is not None:
+            return 0.0
+        half = self.width() / 2
+        nx = max(-1.0, min(1.0, (self._mouse.x() - half) / half))
+        if abs(nx) <= ROLL_ZONE:
+            return 0.0
+        strength = ((abs(nx) - ROLL_ZONE) / (1 - ROLL_ZONE)) ** 2
+        if self._hover_index is not None:
+            strength *= ROLL_OVER_ITEM
+        return math.copysign(strength * ROLL_MAX, nx)
+
+    def _update_hover(self) -> None:
+        """Re-pick the item under a still cursor (the ring or the lens moved it)."""
+        if self._mouse is None or self._dragging:
+            return
+        hit = self.item_at(self._mouse)
+        self._hover_index = hit[1].index if hit else None
+
+    def set_mouse_roll(self, on: bool) -> None:
+        self.mouse_roll = on
+        self._start()
+
     def _tick(self) -> None:
         dt = TICK_MS / 1000.0
         moving = False
         ring = self.current
         cam = self.camera
+        # The lens fades in while the cursor is over the widget (not while dragging or flying).
+        lens_target = 1.0 if (self._mouse is not None and not self._dragging) else 0.0
+        if self._flight is not None:
+            lens_target = 0.0
+        if abs(self._lens - lens_target) > 0.01:
+            self._lens += (lens_target - self._lens) * LENS_EASE
+            moving = True
+        else:
+            self._lens = lens_target
+        # Mouse roll: the cursor held towards a side rolls the ring; a snap follows when it stops.
+        roll = self.mouse_roll_speed() if ring is not None and ring.entries else 0.0
+        if roll:
+            ring.rotation += roll * ring.step * dt
+            ring.velocity = 0.0
+            self._snap_target = None
+            self._update_hover()
+            moving = True
         # Rolling: momentum after a drag, then a snap so an item sits exactly at the front.
-        if ring is not None:
+        elif ring is not None:
             if not self._dragging:
                 ring.velocity *= 0.86
                 if abs(ring.velocity) < 0.05:
@@ -551,6 +647,8 @@ class OrbitExplorer(QWidget):
                 r.scale, r.alpha = r.target_scale, r.target_alpha
         if any(r.dying and r.alpha < 0.02 for r in self.rings):
             self.rings = [r for r in self.rings if not (r.dying and r.alpha < 0.02)]
+        if moving and self._mouse is not None:
+            self._update_hover()
         if not moving:
             self._timer.stop()
         self.update()
@@ -561,10 +659,13 @@ class OrbitExplorer(QWidget):
             r.scale, r.alpha, r.velocity = r.target_scale, r.target_alpha, 0.0
         self.rings = [r for r in self.rings if not r.dying]
         ring = self.current
-        if ring is not None and self._snap_target is not None:
+        if ring is not None and ring.entries:
+            if self._snap_target is None:  # what the next tick would do: snap to the nearest
+                self._snap_target = ring.rotation_to_front(ring.front_index() or 0)
             ring.rotation = self._snap_target
             self._snap_target = None
         self._flight = None
+        self._lens = 1.0 if (self._mouse is not None and not self._dragging) else 0.0
         self._aim_camera()
         self.camera.center = QPointF(self.camera.target_center)
         self.camera.zoom = self.camera.target_zoom
@@ -594,6 +695,7 @@ class OrbitExplorer(QWidget):
                 self._dragging = True
                 self._hover_index = None
                 self._aim_camera()
+                self._start()  # the lens lets go while dragging
             if self._dragging and self._drag_last_x is not None:
                 ring = self.current
                 if ring is not None:
@@ -605,12 +707,11 @@ class OrbitExplorer(QWidget):
                 self._drag_last_x = pos.x()
                 self._start()
             return
+        self._mouse = QPointF(pos)
         hit = self.item_at(pos)
-        new_index = hit[1].index if hit else None
-        if new_index != self._hover_index:
-            self._hover_index = new_index
-            self._aim_camera()
-            self._start()
+        self._hover_index = hit[1].index if hit else None
+        self._start()  # the lens follows the cursor; the edges may roll the ring
+        self.update()
         if hit:
             entry = hit[1].entry
             tip = entry.path if not entry.is_parent else "Go to the parent folder"
@@ -621,8 +722,8 @@ class OrbitExplorer(QWidget):
             self.setToolTip("")
 
     def leaveEvent(self, event) -> None:
+        self._mouse = None
         self._hover_index = None
-        self._aim_camera()
         self._start()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
@@ -786,6 +887,11 @@ class OrbitExplorer(QWidget):
         hidden.setCheckable(True)
         hidden.setChecked(self.show_hidden)
         hidden.toggled.connect(self.set_show_hidden)
+        roll = menu.addAction("Roll with the mouse at the sides")
+        roll.setCheckable(True)
+        roll.setChecked(self.mouse_roll)
+        roll.toggled.connect(self.set_mouse_roll)
+        roll.toggled.connect(self.mouse_roll_changed.emit)
         menu.addAction("Refresh", self.refresh)
         menu.exec(event.globalPos())
 
@@ -863,11 +969,7 @@ class OrbitExplorer(QWidget):
                 "(empty)",
             )
         widget_rect = QRectF(self.rect()).adjusted(-60, -60, 60, 60)
-        items = [
-            g
-            for g in sorted(self.item_geometry(ring), key=lambda g: g.depth)
-            if widget_rect.contains(g.pos)
-        ]
+        items = [g for g in sorted(self.item_geometry(ring), key=_z) if widget_rect.contains(g.pos)]
         front = ring.front_index()
         labelled: set[int] = set()
         taken: list[QRectF] = []
@@ -904,66 +1006,33 @@ class OrbitExplorer(QWidget):
     ) -> None:
         t = self.theme
         size = item.size
-        x, y = item.pos.x(), item.pos.y()
         dim = (0.35 + 0.65 * item.depth) * item.visibility
+        dim = min(1.0, dim + 0.35 * item.magnified)  # the lens also brightens
         painter.setOpacity(ring.alpha * dim)
         hovered = ring is self.current and item.index == self._hover_index
-        if item.entry.is_parent:
-            color = QColor(t.accent_hover if (is_front or hovered) else t.text_muted)
-            painter.setPen(QPen(color, 2.0))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(
-                QRectF(x - size / 2, y - size * 0.32, size, size * 0.72), size * 0.1, size * 0.1
-            )
-            arrow = QPainterPath()
-            arrow.moveTo(x, y - size * 0.22)
-            arrow.lineTo(x - size * 0.22, y + size * 0.05)
-            arrow.lineTo(x - size * 0.08, y + size * 0.05)
-            arrow.lineTo(x - size * 0.08, y + size * 0.3)
-            arrow.lineTo(x + size * 0.08, y + size * 0.3)
-            arrow.lineTo(x + size * 0.08, y + size * 0.05)
-            arrow.lineTo(x + size * 0.22, y + size * 0.05)
-            arrow.closeSubpath()
-            painter.fillPath(arrow, color)
-        elif item.entry.is_dir:
-            color = QColor(t.accent_hover if (is_front or hovered) else t.accent)
-            path = QPainterPath()
-            path.addRoundedRect(
-                QRectF(x - size / 2, y - size * 0.32, size, size * 0.72), size * 0.1, size * 0.1
-            )
-            path.addRoundedRect(
-                QRectF(x - size / 2, y - size * 0.44, size * 0.45, size * 0.2),
-                size * 0.06,
-                size * 0.06,
-            )
-            painter.setPen(QPen(QColor(t.accent_text), 1.0))
-            painter.fillPath(path, color)
+        kind = "parent" if item.entry.is_parent else "dir" if item.entry.is_dir else "file"
+        highlight = is_front or hovered
+        level = round(item.blur * (BLUR_LEVELS - 1))
+        if level == 0:
+            _draw_icon(painter, t, kind, item.pos.x(), item.pos.y(), size, highlight)
         else:
-            color = QColor(t.text if (is_front or hovered) else t.text_muted)
-            w, h = size * 0.68, size * 0.86
-            path = QPainterPath()
-            fold = w * 0.3
-            path.moveTo(x - w / 2, y - h / 2)
-            path.lineTo(x + w / 2 - fold, y - h / 2)
-            path.lineTo(x + w / 2, y - h / 2 + fold)
-            path.lineTo(x + w / 2, y + h / 2)
-            path.lineTo(x - w / 2, y + h / 2)
-            path.closeSubpath()
-            painter.fillPath(path, QColor(t.surface_alt))
-            painter.setPen(QPen(color, 1.2))
-            painter.drawPath(path)
-            painter.setPen(QPen(color, 1.0))
-            for i in range(3):
-                ly = y - h / 2 + fold + 4 + i * (h - fold - 8) / 3
-                painter.drawLine(QPointF(x - w / 2 + 4, ly), QPointF(x + w / 2 - 4, ly))
-        if (is_front or hovered) and ring.scale > 0.7:
+            pixmap = self._icon_pixmap(kind, highlight, size, level)
+            ratio = pixmap.devicePixelRatio()
+            w, h = pixmap.width() / ratio, pixmap.height() / ratio
+            scale = size / _bucket(size)
+            target = QRectF(
+                item.pos.x() - w * scale / 2, item.pos.y() - h * scale / 2, w * scale, h * scale
+            )
+            painter.drawPixmap(target, pixmap, QRectF(pixmap.rect()))
+        if highlight and ring.scale > 0.7:
             painter.setPen(QPen(QColor(t.accent_hover), 2.0 if is_front else 1.0))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(item.pos, size * 0.78, size * 0.78)
         if label:
+            painter.setOpacity(ring.alpha * dim * (1 - 0.6 * item.blur))
             font = self._label_font(item, is_front)
             painter.setFont(font)
-            painter.setPen(QColor(t.text if is_front else t.text_muted))
+            painter.setPen(QColor(t.text if (is_front or hovered) else t.text_muted))
             rect = self._label_rect(item, is_front)
             text = QFontMetricsF(font).elidedText(
                 item.entry.name + ("/" if item.entry.is_dir else ""),
@@ -972,6 +1041,109 @@ class OrbitExplorer(QWidget):
             )
             painter.drawText(rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, text)
         painter.setOpacity(ring.alpha)
+
+    def _icon_pixmap(self, kind: str, highlight: bool, size: float, level: int) -> QPixmap:
+        """An icon rendered at (about) ``size`` px and blurred to ``level``, from the cache."""
+        ratio = self.devicePixelRatioF() or 1.0
+        bucket = _bucket(size)
+        key = (kind, highlight, bucket, level, ratio)
+        pixmap = self._icons.get(key)
+        if pixmap is not None:
+            self._icons.move_to_end(key)
+            return pixmap
+        radius = BLUR_MAX_PX * (bucket / ICON_FRONT) * level / (BLUR_LEVELS - 1)
+        side = bucket * 1.2 + 4 * radius + 4  # room for the blur to spread
+        image = QPixmap(max(1, round(side * ratio)), max(1, round(side * ratio)))
+        image.setDevicePixelRatio(ratio)
+        image.fill(Qt.GlobalColor.transparent)
+        p = QPainter(image)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        _draw_icon(p, self.theme, kind, side / 2, side / 2, bucket, highlight)
+        p.end()
+        pixmap = _blurred(image, radius * ratio)
+        pixmap.setDevicePixelRatio(ratio)
+        self._icons[key] = pixmap
+        while len(self._icons) > ICON_CACHE_SIZE:
+            self._icons.popitem(last=False)
+        return pixmap
+
+
+def _z(item: ItemGeometry) -> float:
+    """Drawing order: nearer items on top, and whatever the lens magnifies above them all."""
+    return item.depth + 2 * item.magnified
+
+
+def _bucket(size: float) -> int:
+    """Icon sizes are cached in 3 px steps."""
+    return max(6, int(round(size / 3)) * 3)
+
+
+def _blurred(pixmap: QPixmap, radius: float) -> QPixmap:
+    """A cheap, good-looking blur: shrink with smoothing and grow back, twice."""
+    if radius < 0.5:
+        return pixmap
+    w, h = pixmap.width(), pixmap.height()
+    factor = 1 + radius / 1.6
+    small_w, small_h = max(1, round(w / factor)), max(1, round(h / factor))
+    smooth = Qt.TransformationMode.SmoothTransformation
+    keep = Qt.AspectRatioMode.IgnoreAspectRatio
+    result = pixmap
+    for _ in range(2):
+        result = result.scaled(small_w, small_h, keep, smooth).scaled(w, h, keep, smooth)
+    return result
+
+
+def _draw_icon(
+    painter: QPainter, t: ThemeConfig, kind: str, x: float, y: float, size: float, highlight: bool
+) -> None:
+    """The vector icon for ``kind`` (parent, dir, file) centred on (x, y)."""
+    if kind == "parent":
+        color = QColor(t.accent_hover if highlight else t.text_muted)
+        painter.setPen(QPen(color, 2.0))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(
+            QRectF(x - size / 2, y - size * 0.32, size, size * 0.72), size * 0.1, size * 0.1
+        )
+        arrow = QPainterPath()
+        arrow.moveTo(x, y - size * 0.22)
+        arrow.lineTo(x - size * 0.22, y + size * 0.05)
+        arrow.lineTo(x - size * 0.08, y + size * 0.05)
+        arrow.lineTo(x - size * 0.08, y + size * 0.3)
+        arrow.lineTo(x + size * 0.08, y + size * 0.3)
+        arrow.lineTo(x + size * 0.08, y + size * 0.05)
+        arrow.lineTo(x + size * 0.22, y + size * 0.05)
+        arrow.closeSubpath()
+        painter.fillPath(arrow, color)
+    elif kind == "dir":
+        color = QColor(t.accent_hover if highlight else t.accent)
+        path = QPainterPath()
+        path.addRoundedRect(
+            QRectF(x - size / 2, y - size * 0.32, size, size * 0.72), size * 0.1, size * 0.1
+        )
+        path.addRoundedRect(
+            QRectF(x - size / 2, y - size * 0.44, size * 0.45, size * 0.2),
+            size * 0.06,
+            size * 0.06,
+        )
+        painter.fillPath(path, color)
+    else:
+        color = QColor(t.text if highlight else t.text_muted)
+        w, h = size * 0.68, size * 0.86
+        path = QPainterPath()
+        fold = w * 0.3
+        path.moveTo(x - w / 2, y - h / 2)
+        path.lineTo(x + w / 2 - fold, y - h / 2)
+        path.lineTo(x + w / 2, y - h / 2 + fold)
+        path.lineTo(x + w / 2, y + h / 2)
+        path.lineTo(x - w / 2, y + h / 2)
+        path.closeSubpath()
+        painter.fillPath(path, QColor(t.surface_alt))
+        painter.setPen(QPen(color, 1.2))
+        painter.drawPath(path)
+        painter.setPen(QPen(color, 1.0))
+        for i in range(3):
+            ly = y - h / 2 + fold + 4 + i * (h - fold - 8) / 3
+            painter.drawLine(QPointF(x - w / 2 + 4, ly), QPointF(x + w / 2 - 4, ly))
 
 
 def _counter_text(ring: Ring | None) -> str:

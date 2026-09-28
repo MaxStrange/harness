@@ -1,4 +1,4 @@
-"""Let the model change harness preferences the user asks for (the critter, for now)."""
+"""Let the model change harness preferences the user asks for."""
 
 from __future__ import annotations
 
@@ -7,6 +7,10 @@ from harness.ui.critter import CRITTERS
 
 SETTINGS = {
     "critter": {"choices": list(CRITTERS), "description": "the sprite shown while the model works"},
+    "file_explorer_mouse_roll": {
+        "choices": ["true", "false"],
+        "description": "whether holding the cursor at the explorer's sides rolls it",
+    },
 }
 
 
@@ -14,7 +18,9 @@ class HarnessSettingsSkill(Skill):
     name = "harness_settings"
     description = (
         "Change a harness preference when the user asks, e.g. 'make the sprite a turtle'. "
-        "Settings: critter (" + ", ".join(CRITTERS) + "). Action 'show' lists the current values."
+        "Settings: critter (" + ", ".join(CRITTERS) + "); file_explorer_mouse_roll (true/false: "
+        "holding the cursor at the file explorer's sides rolls it). "
+        "Action 'show' lists the current values."
     )
     parameters = {
         "type": "object",
@@ -31,7 +37,10 @@ class HarnessSettingsSkill(Skill):
 
     def run(self, args, ctx: SkillContext) -> SkillResult:
         if args["action"] == "show":
-            lines = [f"critter: {ctx.config.ui.critter} (choices: {', '.join(CRITTERS)})"]
+            lines = [
+                f"critter: {ctx.config.ui.critter} (choices: {', '.join(CRITTERS)})",
+                f"file_explorer_mouse_roll: {str(ctx.config.ui.file_explorer_mouse_roll).lower()}",
+            ]
             return SkillResult("\n".join(lines), Handoff.done("Shown"))
         setting = args.get("setting")
         value = (args.get("value") or "").strip().lower()

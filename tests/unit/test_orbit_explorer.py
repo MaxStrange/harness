@@ -12,7 +12,8 @@ from PySide6.QtGui import QMouseEvent, QWheelEvent  # noqa: E402
 
 from harness.config import Config  # noqa: E402
 from harness.ui.orbit_explorer import (  # noqa: E402
-    HOVER_ZOOM,
+    BLUR_FRONT,
+    LENS_GROW,
     MAX_ENTRIES,
     MAX_SLOTS,
     PARENT_SCALE,
@@ -183,27 +184,89 @@ def test_drag_rolls_and_snaps(explorer):
     assert abs(math.sin(ring.angle_of(idx)) - 1.0) < 1e-3  # snapped
 
 
-def test_hover_zooms_towards_item(explorer):
-    ring = explorer.current
-    item = front_item(explorer)
-    explorer.mouseMoveEvent(
+def hover(widget, pos: QPointF):
+    widget.mouseMoveEvent(
         QMouseEvent(
             QEvent.Type.MouseMove,
-            item.pos,
+            pos,
             Qt.MouseButton.NoButton,
             Qt.MouseButton.NoButton,
             Qt.KeyboardModifier.NoModifier,
         )
     )
-    fit, focus = explorer.fit_zoom(ring), explorer._focus(ring)
-    assert explorer._hover_index == item.index
-    assert explorer.camera.target_zoom == pytest.approx(fit * HOVER_ZOOM)
-    assert explorer.camera.target_center.y() > focus.y()  # pulled towards the front item
+
+
+def test_lens_magnifies_and_pushes_apart_without_moving_the_camera(explorer):
+    ring = explorer.current
+    explorer.mouse_roll = False
+    before = {g.index: g for g in explorer.item_geometry(ring)}
+    camera = QPointF(explorer.camera.center), explorer.camera.zoom
+    front = front_item(explorer)
+    hover(explorer, front.pos)
+    assert explorer._hover_index == front.index
     explorer.settle()
-    assert front_item(explorer).size > item.size
+    assert (explorer.camera.center, explorer.camera.zoom) == camera  # the lens, not the camera
+    after = {g.index: g for g in explorer.item_geometry(ring)}
+    assert after[front.index].size == pytest.approx(before[front.index].size * (1 + LENS_GROW))
+    for index, item in after.items():
+        if index != front.index and item.magnified > 0:
+            # neighbours move away from the cursor
+            old_d = math.dist(before[index].pos.toTuple(), front.pos.toTuple())
+            assert math.dist(item.pos.toTuple(), front.pos.toTuple()) > old_d
     explorer.leaveEvent(None)
     explorer.settle()
-    assert explorer.camera.zoom == fit and explorer.camera.center == focus
+    restored = {g.index: g for g in explorer.item_geometry(ring)}
+    assert restored[front.index].size == pytest.approx(before[front.index].size)
+
+
+def test_depth_of_field_blur(explorer):
+    ring = explorer.current
+    explorer.mouse_roll = False
+    items = explorer.item_geometry(ring)
+    front, back = max(items, key=lambda g: g.depth), min(items, key=lambda g: g.depth)
+    assert front.blur == pytest.approx(0.0) and back.blur > 0.3  # no cursor: the back is soft
+    hover(explorer, QPointF(5, explorer.height() - 5))  # far corner, over nothing
+    explorer.settle()
+    items = {g.index: g for g in explorer.item_geometry(ring)}
+    others = [g for g in items.values() if g.index != front.index]
+    assert min(g.blur for g in others) > 0.3  # far from the cursor: out of focus
+    assert 0 < items[front.index].blur <= BLUR_FRONT  # the front softens only a little
+    hover(explorer, front.pos)
+    explorer.settle()
+    assert {g.index: g for g in explorer.item_geometry(ring)}[front.index].blur == 0.0
+    image = explorer.grab().toImage()  # the blurred icons render through the cache
+    assert not image.isNull() and explorer._icons
+
+
+def test_mouse_roll_at_the_sides(qtbot, tmp_path):
+    for i in range(30):
+        (tmp_path / f"f{i:02d}.txt").write_text("x")
+    widget = OrbitExplorer(str(tmp_path), Config().ui.theme)
+    qtbot.addWidget(widget)
+    widget.resize(400, 300)
+    widget.settle()
+    ring = widget.current
+    start = ring.position
+    hover(widget, QPointF(200, 40))  # the middle: no roll
+    assert widget.mouse_roll_speed() == 0.0
+    hover(widget, QPointF(398, 40))  # far right, above the ring: full speed
+    assert widget.mouse_roll_speed() > 0
+    right_neighbour = next(
+        g for g in widget.item_geometry(ring) if g.index == (ring.front_index() - 1) % 31
+    )
+    assert right_neighbour.pos.x() > widget.width() / 2  # lower indices sit on the right
+    for _ in range(30):
+        widget._tick()
+    assert ring.position < start - 1  # entries from the right came to the front
+    hover(widget, QPointF(2, 40))
+    assert widget.mouse_roll_speed() < 0
+    widget.set_mouse_roll(False)
+    assert widget.mouse_roll_speed() == 0.0
+    widget.set_mouse_roll(True)
+    widget.leaveEvent(None)
+    assert widget.mouse_roll_speed() == 0.0
+    widget.settle()
+    assert abs(math.sin(ring.angle_of(ring.front_index())) - 1.0) < 1e-6  # snapped
 
 
 def test_expand_flies_camera_and_collapse_flies_back(explorer, tree):
