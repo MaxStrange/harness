@@ -16,9 +16,14 @@ roll the ring, which snaps to the nearest item when it stops; with mouse roll
 on, holding the cursor towards either side rolls it too. Typing a name brings
 the first match to the front.
 
-The mouse is a lens, after Adasha's Screenvader study: icons near the cursor
-grow and are pushed apart, and icons blur with their distance from the
-cursor and towards the back of the ring, like a camera's depth of field.
+The mouse is a lens: icons near the cursor grow and are pushed apart, and
+icons blur with their distance from the cursor and towards the back of the
+ring, like a camera's depth of field.
+
+Credit: the design follows Screenvader, the Flash portfolio of Stephane
+Bourez (FWA of the Day, 10 December 2005), and the lens and blur follow Adam
+Shailer's (Adasha) study of it, https://www.adasha.com/lab/layouts/vader/.
+No code is taken from either; this is a reimplementation of the idea in Qt.
 
 The widget exposes the same interface as the tree stub (``set_root``,
 ``reveal``, ``root``, ``open_requested``, ``cwd_requested``) so the main window
