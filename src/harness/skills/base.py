@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol
@@ -225,6 +226,7 @@ class Services:
     ui: UiBridge = field(default_factory=RecordingUi)
     task_lists: Any | None = None  # harness.skills.tasklist_store.TaskListStore
     background_jobs: Any | None = None  # harness.terminal.manager.BackgroundJobs
+    stack: Any | None = None  # harness.model.stack.ModelStack
 
 
 @dataclass
@@ -236,6 +238,12 @@ class SkillContext:
     services: Services
     session_id: str = "test"
     cancel: CancelToken = field(default_factory=CancelToken)
+    # Short status lines while a long step runs ("Loading FLUX.1-schnell...").
+    progress: Callable[[str], None] | None = None
+
+    def say(self, text: str) -> None:
+        if self.progress is not None:
+            self.progress(text)
 
     def resolve(self, path: str) -> Path:
         return resolve_path(path, self.cwd)

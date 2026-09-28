@@ -54,6 +54,11 @@ class HarnessPaths:
         """Default untrusted location for anything that arrives from the web."""
         return self.home / "downloads"
 
+    @property
+    def generated_dir(self) -> Path:
+        """Where generation skills (images, 3D models) save their output by default."""
+        return self.home / "generated"
+
     def ensure_directories(self) -> None:
         for path in (self.home, self.logs_dir, self.user_skills_dir, self.downloads_dir):
             path.mkdir(parents=True, exist_ok=True)

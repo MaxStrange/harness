@@ -186,6 +186,8 @@ class Agent:
                 )
             self._maybe_compact()
             for _round in range(MAX_TOOL_ROUNDS):
+                if not self._restore_stack():
+                    break
                 reply = self._model_turn()
                 if reply is None:
                     cancelled = self.cancel.cancelled
@@ -204,6 +206,7 @@ class Agent:
             log.exception("agent turn crashed")
             self.events.status(f"Internal error: {exc.__class__.__name__}: {exc}", error=True)
         finally:
+            self._restore_stack(final=True)
             self._busy.release()
             self.events.turn_finished(cancelled)
 
@@ -268,6 +271,7 @@ class Agent:
                 services=self.services,
                 session_id=self.session.id,
                 cancel=self.cancel,
+                progress=self.events.status,
             )
             outcome = self.runner.execute(call, ctx)
             result_msg = Message(
@@ -295,6 +299,26 @@ class Agent:
             self.events.skill_finished(outcome)
             if outcome.handoff_now and handoff is not None:
                 self.events.handoff_requested(handoff)
+
+    def _restore_stack(self, final: bool = False) -> bool:
+        """Hand back to the main model: reload whatever a generation skill swapped out.
+
+        False when that failed, so the turn stops instead of calling a model that is not there.
+        The ``final`` call (end of turn, also after a cancel) reloads even if the user pressed stop.
+        """
+        stack = self.services.stack
+        if stack is None or not stack.dirty:
+            return True
+        try:
+            stack.restore(progress=self.events.status, cancel=None if final else self.cancel)
+        except ModelCancelled:
+            return False
+        except Exception as exc:  # noqa: BLE001 - reported, and the turn ends cleanly
+            log.exception("restoring the model stack failed")
+            self.events.status(f"Could not reload the models after a skill: {exc}", error=True)
+            return False
+        self.events.status("Models restored.")
+        return True
 
     def _maybe_compact(self) -> None:
         main = self.config.models.main

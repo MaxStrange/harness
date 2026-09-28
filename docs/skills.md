@@ -67,6 +67,13 @@ to the user, and `handoff` is offered as a button (or performed immediately when
 
 Skills run on worker threads. Never touch Qt widgets directly; go through `ctx.services.ui`.
 
+## Skills that need a model on the LLM machine
+
+Call `ctx.services.stack.acquire(["image"], progress=ctx.say, cancel=ctx.cancel)` (see
+`builtin/_generation.py:make_room`) before using a component listed in `models.stack`. Do not
+restore afterwards: the agent does that before the main model's next call, so several generation
+calls in one round swap only once. `ctx.say(text)` puts a line in the status bar during long steps.
+
 ## Untrusted content
 
 Anything from the web is untrusted (SEC2, SEC5). A skill that returns such content to the model
