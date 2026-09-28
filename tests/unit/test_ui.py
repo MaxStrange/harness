@@ -117,7 +117,10 @@ def test_window_approval_flow_approve_via_widget(qtbot, window, tmp_path):
     qtbot.waitUntil(lambda: bool(win.chat._container.findChildren(ApprovalWidget)), timeout=5000)
     widget = win.chat._container.findChildren(ApprovalWidget)[0]
     assert widget.pending.request.detail_kind == "diff" and "+hi" in widget.pending.request.detail
+    assert win.turn_status.text() == "Waiting for your approval"
     widget.approve_button.click()
+    # Not stuck on "Waiting for your approval" while the approved skill runs.
+    assert win.turn_status.text() == "Running write_file..."
     wait_turn(qtbot, win)
     assert (tmp_path / "new.txt").read_text() == "hi\n"
     assert widget.decided and "Approved" in widget.outcome_label.text()
@@ -133,6 +136,7 @@ def test_window_approval_reject_with_reason(qtbot, window, tmp_path):
     qtbot.waitUntil(lambda: "offline" in widget.summary_label.text(), timeout=5000)  # SEC1a
     widget.reason_edit.setText("dangerous")
     widget.reject_button.click()
+    assert win.turn_status.text().startswith("Denied")
     wait_turn(qtbot, win)
     tool_msg = model.requests[1][-1]
     assert "rejected" in tool_msg.content and "dangerous" in tool_msg.content

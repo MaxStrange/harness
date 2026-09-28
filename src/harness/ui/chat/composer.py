@@ -1,4 +1,7 @@
-"""The message input: Enter sends, Shift+Enter inserts a newline, Tab completes a path, Stop cancels."""
+"""The message input: Enter sends, Shift+Enter inserts a newline, Tab completes a path, Stop cancels.
+
+Up in an empty box recalls earlier messages (Down goes back towards the newest).
+"""
 
 from __future__ import annotations
 
@@ -13,6 +16,7 @@ from PySide6.QtWidgets import QHBoxLayout, QListWidget, QPlainTextEdit, QPushBut
 
 _PATH_START = re.compile(r"^(~|\.{1,2}[/\\]|/|[A-Za-z]:[/\\]|\\\\)")
 MAX_CHOICES = 60
+HISTORY_LIMIT = 200  # messages kept for Up-arrow recall
 
 
 def complete_path(token: str, cwd: str) -> list[str]:
@@ -62,8 +66,20 @@ def common_prefix(items: list[str]) -> str:
 class _Input(QPlainTextEdit):
     submitted = Signal()
     complete_requested = Signal()
+    history_requested = Signal(int)  # -1 = older, +1 = newer; only asked when browsing makes sense
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.browsing = False  # the text is an unedited entry recalled from history
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down) and not event.modifiers():
+            # Up on an empty box (or while flipping through recalled messages) walks the
+            # history; anywhere else the arrows move the cursor as usual.
+            if self.browsing or not self.toPlainText():
+                if event.key() == Qt.Key.Key_Up or self.browsing:
+                    self.history_requested.emit(-1 if event.key() == Qt.Key.Key_Up else 1)
+                    return
         if (
             event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
             and not event.modifiers() & Qt.KeyboardModifier.ShiftModifier
@@ -116,6 +132,8 @@ class Composer(QWidget):
         self.input.setMaximumHeight(140)
         self.input.submitted.connect(self._submit)
         self.input.complete_requested.connect(self.complete)
+        self.input.history_requested.connect(self.recall)
+        self.input.textChanged.connect(self._on_text_changed)
         layout.addWidget(self.input, 1)
         self.send_button = QPushButton("Send")
         self.send_button.setObjectName("accent")
@@ -130,13 +148,57 @@ class Composer(QWidget):
         self.choices.picked.connect(self._pick)
         self.choices.hide()
         self._token_span: tuple[int, int] | None = None
+        self.history: list[str] = []  # sent messages, oldest first
+        self._history_index: int | None = None  # which entry is showing while browsing
+        self._recalling = False
 
     def _submit(self) -> None:
         text = self.input.toPlainText().strip()
         if not text:
             return
+        self.add_history(text)
         self.input.clear()
         self.send_requested.emit(text)
+
+    # -- history ---------------------------------------------------------------
+
+    def set_history(self, messages: list[str]) -> None:
+        """Replace the history (the open session's earlier messages, oldest first)."""
+        self.history = [m for m in messages if m.strip()][-HISTORY_LIMIT:]
+        self._stop_browsing()
+
+    def add_history(self, text: str) -> None:
+        if not self.history or self.history[-1] != text:
+            self.history.append(text)
+            del self.history[:-HISTORY_LIMIT]
+        self._stop_browsing()
+
+    def recall(self, direction: int) -> None:
+        """Show the previous (-1) or next (+1) sent message; past the newest, an empty box."""
+        if not self.history:
+            return
+        index = len(self.history) if self._history_index is None else self._history_index
+        index = max(0, min(len(self.history), index + direction))
+        if index == len(self.history):
+            self._show_recalled(None, "")
+        else:
+            self._show_recalled(index, self.history[index])
+
+    def _show_recalled(self, index: int | None, text: str) -> None:
+        self._recalling = True
+        self.input.setPlainText(text)
+        self._recalling = False
+        self.input.moveCursor(QTextCursor.MoveOperation.End)
+        self._history_index = index
+        self.input.browsing = index is not None
+
+    def _on_text_changed(self) -> None:
+        if not self._recalling:  # typing into a recalled message makes it a new draft
+            self._stop_browsing()
+
+    def _stop_browsing(self) -> None:
+        self._history_index = None
+        self.input.browsing = False
 
     def set_busy(self, busy: bool) -> None:
         self.send_button.setVisible(not busy)

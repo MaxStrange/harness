@@ -31,6 +31,7 @@ def test_complete_relative_and_absolute(tree):
 
 def test_complete_tilde(tree, monkeypatch):
     monkeypatch.setenv("HOME", str(tree))
+    monkeypatch.setenv("USERPROFILE", str(tree))  # what expanduser reads on Windows
     assert complete_path("~/do", "/") == ["~/docs/"]
     assert "~/docs/" in complete_path("~", "/")
 
@@ -55,3 +56,52 @@ def test_composer_tab_completes_unique_and_extends_prefix(qtbot, tree):
     assert composer.input.toPlainText() == "look at ./docs/"
     composer.insert_text("/tmp/x.txt")
     assert composer.input.toPlainText() == "look at ./docs/ /tmp/x.txt"
+
+
+def key(composer, which):
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+
+    k = {"up": Qt.Key.Key_Up, "down": Qt.Key.Key_Down}[which]
+    composer.input.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, k, Qt.KeyboardModifier.NoModifier))
+
+
+def test_up_in_an_empty_box_walks_the_history(qtbot, tree):
+    composer = Composer(lambda: str(tree))
+    qtbot.addWidget(composer)
+    sent = []
+    composer.send_requested.connect(sent.append)
+    composer.set_history(["first", "second"])
+    for text in ("third", "fourth"):
+        composer.input.setPlainText(text)
+        composer._submit()
+    assert sent == ["third", "fourth"] and composer.input.toPlainText() == ""
+    text = composer.input.toPlainText
+    key(composer, "up")
+    assert text() == "fourth"
+    key(composer, "up")
+    key(composer, "up")
+    assert text() == "second"
+    key(composer, "down")
+    assert text() == "third"
+    key(composer, "down")
+    key(composer, "down")  # past the newest: an empty box again
+    assert text() == ""
+    key(composer, "down")  # Down on an empty box does nothing
+    assert text() == ""
+
+
+def test_up_does_not_replace_a_draft(qtbot, tree):
+    composer = Composer(lambda: str(tree))
+    qtbot.addWidget(composer)
+    composer.set_history(["old message"])
+    draft = "line one\nline two"
+    composer.input.setPlainText(draft)
+    key(composer, "up")  # moves the cursor inside the draft instead
+    assert composer.input.toPlainText() == draft
+    composer.input.clear()
+    key(composer, "up")
+    assert composer.input.toPlainText() == "old message"
+    composer.input.insertPlainText(" edited")  # editing a recalled message stops browsing
+    key(composer, "up")
+    assert composer.input.toPlainText() == "old message edited"
