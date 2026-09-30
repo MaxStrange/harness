@@ -547,3 +547,29 @@ def test_explorer_reveal_in_file_manager(qtbot, window, tmp_path, monkeypatch):
     monkeypatch.setattr(win.handoffs, "open_external", lambda h: opened.append(h) or None)
     win.explorer.reveal_requested.emit(str(tmp_path))
     assert opened and opened[0].action == "file_manager" and opened[0].target == str(tmp_path)
+
+
+def test_dragging_a_session_into_a_project_adopts_its_root(qtbot, window, tmp_path):
+    win, model, core = window
+    root = tmp_path / "proj"
+    root.mkdir()
+    project = core.store.create_project("proj", str(root), "")
+    other = core.store.create_session(str(tmp_path), "dragged")
+    win.sessions.refresh()
+    from harness.ui.sessions_panel import ID_ROLE
+
+    def header():  # the tree is rebuilt after every drop
+        tree = win.sessions.tree
+        return next(
+            tree.topLevelItem(i)
+            for i in range(tree.topLevelItemCount())
+            if tree.topLevelItem(i).data(0, ID_ROLE) == project.id
+        )
+
+    assert win.sessions.drop(win.sessions._find(other.id), header(), "on")
+    record = core.store.get_session(other.id)
+    assert record.project_id == project.id and record.cwd == str(root)
+    # The open session too: the agent follows into the project's root.
+    open_id = win.agent.session.id
+    assert win.sessions.drop(win.sessions._find(open_id), header(), "on")
+    assert win.agent.session.project_id == project.id and win.agent.session.cwd == root

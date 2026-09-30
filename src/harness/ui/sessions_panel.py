@@ -1,11 +1,15 @@
-"""Saved chat sessions (UI4, SH1, SH2): a tree of projects and their sessions, with search."""
+"""Saved chat sessions (UI4, SH1, SH2): a tree of projects and their sessions, with search.
+
+The order is yours: drag a session between others to place it, onto a project
+header to move it into that project, and drag project headers to reorder them.
+"""
 
 from __future__ import annotations
 
 import time
 
 from PySide6.QtCore import QModelIndex, Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QDropEvent, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -57,6 +61,44 @@ class _TitleDelegate(QStyledItemDelegate):
         title = editor.text().strip()
         if title and title != index.data(TITLE_ROLE):
             self.panel.rename_requested.emit(index.data(ID_ROLE), title)
+
+
+class _SessionTree(QTreeWidget):
+    """A tree whose drops are interpreted by the panel instead of moving items itself."""
+
+    def __init__(self, panel: SessionsPanel) -> None:
+        super().__init__()
+        self.panel = panel
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+
+    def _drop_target(self, event) -> tuple[QTreeWidgetItem | None, str]:
+        target = self.itemAt(event.position().toPoint())
+        where = {
+            QAbstractItemView.DropIndicatorPosition.AboveItem: "above",
+            QAbstractItemView.DropIndicatorPosition.BelowItem: "below",
+            QAbstractItemView.DropIndicatorPosition.OnItem: "on",
+        }.get(self.dropIndicatorPosition(), "end")
+        return target, where
+
+    def dragMoveEvent(self, event) -> None:
+        super().dragMoveEvent(event)  # drop indicator and auto-scroll
+        target, where = self._drop_target(event)
+        if self.panel.plan_drop(self.currentItem(), target, where) is None:
+            event.ignore()
+        else:
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        target, where = self._drop_target(event)
+        dragged = self.currentItem()
+        # The panel rewrites the store and rebuilds the tree; Qt must not move the items.
+        event.setDropAction(Qt.DropAction.IgnoreAction)
+        event.accept()
+        self.panel.drop(dragged, target, where)
 
 
 class SessionsPanel(QWidget):
@@ -145,7 +187,7 @@ class SessionsPanel(QWidget):
         for box in (self.regex_box, self.case_box):
             box.toggled.connect(self.refresh)
 
-        self.tree = QTreeWidget()
+        self.tree = _SessionTree(self)
         self.tree.setHeaderHidden(True)
         self.tree.setColumnCount(1)
         self.tree.setIndentation(18)
@@ -210,6 +252,7 @@ class SessionsPanel(QWidget):
         query = self.search.text().strip()
         self.tree.blockSignals(True)
         self.tree.clear()
+        self.tree.setDragEnabled(not query)  # search results are not the list you arrange
         if query:
             self._fill_search(query)
         else:
@@ -248,7 +291,7 @@ class SessionsPanel(QWidget):
                 header.addChild(self._session_item(record.id, record.title, _when(record.updated)))
             header.setExpanded(project.id not in self._collapsed)
         loose = by_project[None]
-        if projects and loose:
+        if projects:  # even when empty: dropping a session here takes it out of its project
             header = self._project_item(NO_PROJECT, "No project", len(loose))
             self.tree.addTopLevelItem(header)
             for record in loose:
@@ -272,7 +315,8 @@ class SessionsPanel(QWidget):
             if editable
             else item.flags() & ~Qt.ItemFlag.ItemIsEditable
         )
-        item.setFlags(flags)
+        # Dropping is between sessions (above/below), never onto one.
+        item.setFlags((flags | Qt.ItemFlag.ItemIsDragEnabled) & ~Qt.ItemFlag.ItemIsDropEnabled)
         return item
 
     def _project_item(self, project_id: str, name: str, count: int) -> QTreeWidgetItem:
@@ -280,12 +324,18 @@ class SessionsPanel(QWidget):
         item.setData(0, ID_ROLE, project_id)
         item.setData(0, TITLE_ROLE, name)
         item.setData(0, KIND_ROLE, "project")
-        item.setFlags(Qt.ItemFlag.ItemIsEnabled)  # a header: not selectable, not editable
+        # A header: not selectable or editable; sessions drop onto it; real projects drag.
+        flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsDropEnabled
+        if project_id != NO_PROJECT:
+            flags |= Qt.ItemFlag.ItemIsDragEnabled
+        item.setFlags(flags)
         font = QFont()
         font.setBold(True)
         item.setFont(0, font)
         item.setToolTip(
-            0, "Click the arrow to fold; double-click to edit the project; right-click for more"
+            0,
+            "Click the arrow to fold; double-click to edit the project; drag to reorder; "
+            "drop sessions here to move them in; right-click for more",
         )
         return item
 
@@ -325,6 +375,106 @@ class SessionsPanel(QWidget):
         self.tree.blockSignals(True)
         self._select_current()
         self.tree.blockSignals(False)
+
+    # -- arranging by drag and drop -------------------------------------------------
+
+    def _groups(self) -> tuple[list[str | None], dict[str | None, list[str]]]:
+        """The tree as shown: project ids in order (None = no project) and each one's sessions."""
+        order: list[str | None] = []
+        groups: dict[str | None, list[str]] = {}
+        loose: list[str] = []
+        for i in range(self.tree.topLevelItemCount()):
+            top = self.tree.topLevelItem(i)
+            if top.data(0, KIND_ROLE) == "session":
+                loose.append(top.data(0, ID_ROLE))
+                continue
+            key = None if top.data(0, ID_ROLE) == NO_PROJECT else top.data(0, ID_ROLE)
+            order.append(key)
+            groups[key] = [top.child(j).data(0, ID_ROLE) for j in range(top.childCount())]
+        if loose or None not in groups:
+            groups.setdefault(None, []).extend(loose)
+            if None not in order:
+                order.append(None)
+        return order, groups
+
+    @staticmethod
+    def _key(item: QTreeWidgetItem) -> str | None:
+        """The project an item stands for, or holds it (None = no project)."""
+        header = item if item.data(0, KIND_ROLE) == "project" else item.parent()
+        if header is None:
+            return None
+        project_id = header.data(0, ID_ROLE)
+        return None if project_id == NO_PROJECT else project_id
+
+    def plan_drop(
+        self, dragged: QTreeWidgetItem | None, target: QTreeWidgetItem | None, where: str
+    ) -> tuple | None:
+        """What a drop would do, or None if it is not allowed.
+
+        ("session", session_id, project_id, index) puts a session at ``index`` in that project;
+        ("projects", [project ids]) is the new order of the project headers.
+        """
+        if dragged is None or self.search.text().strip():
+            return None
+        order, groups = self._groups()
+        if dragged.data(0, KIND_ROLE) == "session":
+            session_id = dragged.data(0, ID_ROLE)
+            if target is None:
+                if any(k is not None for k in order):  # between headers: nowhere sensible
+                    return None
+                return ("session", session_id, None, len(groups[None]))
+            if target.data(0, KIND_ROLE) == "project":
+                key = self._key(target)
+                if where == "above":  # the gap above a header ends the previous project
+                    position = order.index(key)
+                    if position > 0:
+                        previous = order[position - 1]
+                        return ("session", session_id, previous, len(groups[previous]))
+                return ("session", session_id, key, 0)
+            key = self._key(target)
+            index = groups[key].index(target.data(0, ID_ROLE)) + (1 if where != "above" else 0)
+            return ("session", session_id, key, index)
+        project_id = dragged.data(0, ID_ROLE)
+        if project_id == NO_PROJECT:
+            return None
+        projects = [k for k in order if k is not None]
+        if target is None or self._key(target) is None:
+            index = len(projects)  # the end, still above "No project"
+        else:
+            key = self._key(target)
+            below = where != "above" or target.data(0, KIND_ROLE) == "session"
+            index = projects.index(key) + (1 if below else 0)
+        moved = [p for p in projects if p != project_id]
+        index -= sum(1 for p in projects[:index] if p == project_id)
+        moved.insert(index, project_id)
+        return ("projects", moved)
+
+    def drop(
+        self, dragged: QTreeWidgetItem | None, target: QTreeWidgetItem | None, where: str
+    ) -> bool:
+        """Carry out a drop: rewrite the order in the store and rebuild the tree."""
+        plan = self.plan_drop(dragged, target, where)
+        if plan is None:
+            return False
+        if plan[0] == "projects":
+            self.store.reorder_projects(plan[1])
+            self.refresh()
+            return True
+        _, session_id, project_id, index = plan
+        _, groups = self._groups()
+        source = self._key(dragged)
+        ordered = list(groups.get(project_id, []))
+        if session_id in ordered:
+            if ordered.index(session_id) < index:
+                index -= 1
+            ordered.remove(session_id)
+        ordered.insert(index, session_id)
+        if source != project_id:
+            # Through the window, so the session also adopts the project's root directory.
+            self.move_requested.emit(session_id, project_id)
+        self.store.reorder_sessions(project_id, ordered)
+        self.refresh()
+        return True
 
     # -- interaction ---------------------------------------------------------------
 

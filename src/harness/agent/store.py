@@ -126,6 +126,26 @@ class SessionStore:
         columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(sessions)")}
         if "project_id" not in columns:
             self._conn.execute("ALTER TABLE sessions ADD COLUMN project_id TEXT")
+        # A manual order (drag and drop in the sessions panel). Existing rows start in the
+        # order they were shown before: sessions newest first, projects by name.
+        if "position" not in columns:
+            self._conn.execute("ALTER TABLE sessions ADD COLUMN position REAL")
+            ids = [
+                r["id"] for r in self._conn.execute("SELECT id FROM sessions ORDER BY updated DESC")
+            ]
+            self._conn.executemany(
+                "UPDATE sessions SET position=? WHERE id=?", list(enumerate(ids))
+            )
+        project_columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(projects)")}
+        if "position" not in project_columns:
+            self._conn.execute("ALTER TABLE projects ADD COLUMN position REAL")
+            ids = [
+                r["id"]
+                for r in self._conn.execute("SELECT id FROM projects ORDER BY name COLLATE NOCASE")
+            ]
+            self._conn.executemany(
+                "UPDATE projects SET position=? WHERE id=?", list(enumerate(ids))
+            )
 
     def _init_fts(self) -> bool:
         try:
@@ -148,17 +168,37 @@ class SessionStore:
         record = SessionRecord(uuid.uuid4().hex[:12], title, cwd, now, now, project_id)
         with self._lock:
             self._conn.execute(
-                "INSERT INTO sessions(id, title, cwd, created, updated, project_id) "
-                "VALUES (?,?,?,?,?,?)",
-                (record.id, title, cwd, now, now, project_id),
+                "INSERT INTO sessions(id, title, cwd, created, updated, project_id, position) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (record.id, title, cwd, now, now, project_id, self._top_position()),
             )
         return record
 
     def set_session_project(self, session_id: str, project_id: str | None) -> None:
+        """Move a session into a project (or out of every project), at the top of its list."""
         with self._lock:
+            current = self.get_session(session_id)
+            if current is None or current.project_id == project_id:
+                return
             self._conn.execute(
-                "UPDATE sessions SET project_id=? WHERE id=?", (project_id, session_id)
+                "UPDATE sessions SET project_id=?, position=? WHERE id=?",
+                (project_id, self._top_position(), session_id),
             )
+
+    def reorder_sessions(self, project_id: str | None, ordered_ids: list[str]) -> None:
+        """Put ``ordered_ids`` into ``project_id`` in exactly this order (drag and drop).
+
+        Positions are only compared within a project, so these can reuse 0..n-1.
+        """
+        with self._lock:
+            self._conn.executemany(
+                "UPDATE sessions SET project_id=?, position=? WHERE id=?",
+                [(project_id, i, sid) for i, sid in enumerate(ordered_ids)],
+            )
+
+    def _top_position(self) -> float:
+        row = self._conn.execute("SELECT MIN(position) FROM sessions").fetchone()
+        return (row[0] if row and row[0] is not None else 0) - 1
 
     # -- projects ----------------------------------------------------------
 
@@ -169,11 +209,29 @@ class SessionStore:
             uuid.uuid4().hex[:12], name, root_dir or None, instructions, time.time()
         )
         with self._lock:
+            row = self._conn.execute("SELECT MAX(position) FROM projects").fetchone()
+            position = (row[0] if row and row[0] is not None else -1) + 1  # new ones go last
             self._conn.execute(
-                "INSERT INTO projects(id, name, root_dir, instructions, created) VALUES (?,?,?,?,?)",
-                (record.id, record.name, record.root_dir, record.instructions, record.created),
+                "INSERT INTO projects(id, name, root_dir, instructions, created, position) "
+                "VALUES (?,?,?,?,?,?)",
+                (
+                    record.id,
+                    record.name,
+                    record.root_dir,
+                    record.instructions,
+                    record.created,
+                    position,
+                ),
             )
         return record
+
+    def reorder_projects(self, ordered_ids: list[str]) -> None:
+        """The order of the project headers (drag and drop)."""
+        with self._lock:
+            self._conn.executemany(
+                "UPDATE projects SET position=? WHERE id=?",
+                [(i, pid) for i, pid in enumerate(ordered_ids)],
+            )
 
     def get_project(self, project_id: str | None) -> ProjectRecord | None:
         if project_id is None:
@@ -185,7 +243,7 @@ class SessionStore:
     def list_projects(self) -> list[ProjectRecord]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM projects ORDER BY name COLLATE NOCASE"
+                "SELECT * FROM projects ORDER BY position, name COLLATE NOCASE"
             ).fetchall()
         return [_project(r) for r in rows]
 
@@ -225,7 +283,7 @@ class SessionStore:
     def list_sessions(self, limit: int = 200) -> list[SessionRecord]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM sessions ORDER BY updated DESC LIMIT ?", (limit,)
+                "SELECT * FROM sessions ORDER BY position, updated DESC LIMIT ?", (limit,)
             ).fetchall()
         return [_record(r) for r in rows]
 
