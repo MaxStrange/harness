@@ -360,9 +360,11 @@ class MainWindow(QMainWindow):
                 if m.role == "user" and m.content and not _is_synthetic_user_message(m.content)
             ]
         )
-        self.task_view.set_session(session_id)
-        self.sessions.set_current(session_id, self.agent.session.project_id)
         project = self.core.store.get_project(self.agent.session.project_id)
+        self.task_view.set_session(
+            session_id, project.id if project else None, project.name if project else None
+        )
+        self.sessions.set_current(session_id, self.agent.session.project_id)
         title = self.config.ui.window_title
         self.setWindowTitle(f"{title} - {project.name}" if project else title)
         self.cwd_label.setText(str(self.agent.session.cwd))

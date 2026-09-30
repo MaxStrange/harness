@@ -18,6 +18,7 @@ from harness.config import Config  # noqa: E402
 from harness.model.fake import FakeModel  # noqa: E402
 from harness.skills.base import ApprovalDecision, ApprovalRequest, Handoff  # noqa: E402
 from harness.skills.runner import PendingApproval  # noqa: E402
+from harness.skills.tasklist_store import session_key  # noqa: E402
 from harness.ui.bridge import AgentController, MainThreadInvoker, QtUiBridge  # noqa: E402
 from harness.ui.chat.approval_widget import ApprovalWidget  # noqa: E402
 from harness.ui.dock import Dock  # noqa: E402
@@ -288,7 +289,7 @@ def test_views_toggle_and_image_viewer(qtbot, window, tmp_path):
     assert not win.side_panel.isVisibleTo(win) and win.dock.active is None
     win.perform_handoff(Handoff.tasks())
     assert win.dock.active == "tasks"
-    core.task_lists.add(win.agent.session.id, "do a thing")
+    core.task_lists.add(session_key(win.agent.session.id), "do a thing")
     qtbot.waitUntil(lambda: win.task_view.list.count() == 1, timeout=3000)
     assert "do a thing" in win.task_view.list.item(0).text()
 
@@ -529,16 +530,19 @@ def test_moving_into_a_project_adopts_its_root(qtbot, window, tmp_path):
 
 def test_task_list_drag_reorder(qtbot, window):
     win, model, core = window
-    sid = win.agent.session.id
+    sid = session_key(win.agent.session.id)
     a = core.task_lists.add(sid, "first")
     b = core.task_lists.add(sid, "second")
     c = core.task_lists.add(sid, "third")
     win.perform_handoff(Handoff.tasks())
     qtbot.waitUntil(lambda: win.task_view.list.count() == 3, timeout=3000)
-    win.task_view.list.reordered.emit([c.id, a.id, b.id])  # what a drop produces
+    view = win.task_view
+    view.list.dropped.emit(view.list, c.id, 0)  # what a drop of "third" on top produces
+    qtbot.waitUntil(lambda: view.list.order() == [c.id, a.id, b.id], timeout=3000)
     assert [t.text for t in core.task_lists.get(sid).tasks] == ["third", "first", "second"]
-    assert win.task_view.list.order() == [c.id, a.id, b.id]
-    assert "drag to reorder" in win.task_view.summary.text()
+    assert "drag to reorder" in view.summary.text()
+    # Saved as it happens, not only when the model next runs a skill.
+    assert '"third"' in core.store.load_task_list(sid).split("first")[0]
 
 
 def test_explorer_reveal_in_file_manager(qtbot, window, tmp_path, monkeypatch):

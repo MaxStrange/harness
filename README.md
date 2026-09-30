@@ -107,6 +107,11 @@ Two places to tell the model things it should always know:
 
 Both are injected into the system prompt, so a change applies to the next message.
 
+**Tasks** come in two kinds, shown together in the tasks panel: each session's own checklist
+(the `task_list` skill) and, for sessions in a project, the project's list (`project_task_list`),
+a backlog shared by all its sessions and listed in the model's prompt. Tick, drag to reorder, or drag
+a task from one list to the other; every change is saved immediately.
+
 The sessions panel groups sessions under collapsible project headers. Search covers every session;
 **Advanced** adds filters by project, speaker and age, plus regex and case-sensitive matching.
 

@@ -104,8 +104,8 @@ def build_core(
     net_policy = NetPolicy.from_config(config.web.allowed_private_hosts, config.web.searxng_url)
     path_policy = PathPolicy.from_config(config.security, config.web)
     terminals = TerminalManager(config.terminal)
-    jobs = BackgroundJobs(terminals)
     task_lists = TaskListStore()
+    jobs = BackgroundJobs(terminals)
     stack = ModelStack(config.models.stack) if config.models.stack.enabled else None
     services = Services(
         path_policy=path_policy,
@@ -143,6 +143,8 @@ def build_core(
         max_result_chars=config.skills.max_result_chars,
     )
     store = SessionStore(config.sessions.db_path)
+    # Every change to a checklist (by the model or in the panel) is saved at once.
+    task_lists.loader, task_lists.saver = store.load_task_list, store.save_task_list
     return HarnessCore(
         config,
         paths,

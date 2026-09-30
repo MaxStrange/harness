@@ -237,6 +237,7 @@ class SkillContext:
     config: Config
     services: Services
     session_id: str = "test"
+    project_id: str | None = None  # the session's project, if it is in one
     cancel: CancelToken = field(default_factory=CancelToken)
     # Short status lines while a long step runs ("Loading FLUX.1-schnell...").
     progress: Callable[[str], None] | None = None
