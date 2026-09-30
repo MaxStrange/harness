@@ -141,7 +141,11 @@ def tool_spec_for(skill: Skill) -> ToolSpec:
     schema["properties"] = props
     description = skill.description.strip()
     if skill.needs_approval:
-        description += " (Requires user approval.)"
+        # Not "requires approval": models read that as "ask in chat first" and never call it.
+        description += (
+            " (When you call it, the harness asks the user to approve with a button; just call"
+            " it, do not ask for approval in chat.)"
+        )
     description += f" Handoff: {skill.handoff_description.strip()}"
     return ToolSpec(name=skill.name, description=description, parameters=schema)
 

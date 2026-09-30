@@ -7,6 +7,7 @@ layer implements with signals. Nothing in here imports Qt.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +37,20 @@ from harness.skills.tasklist_store import project_key
 log = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 40
+NO_CALL_NOTICE = (
+    "The model asked you to approve something but did not call a skill, so there is nothing to "
+    'approve and no button. Reply "go ahead" and it will make the call; the Approve button '
+    "appears then."
+)
+_APPROVAL_ASK = re.compile(
+    r"\b(please|once you|when you|after you|if you)\b[^.\n]{0,60}\b(approve|approval|confirm)",
+    re.IGNORECASE,
+)
+
+
+def asks_for_approval(text: str | None) -> bool:
+    """Whether a reply that called no skill is waiting for an approval only a call can produce."""
+    return bool(text) and bool(_APPROVAL_ASK.search(text))
 
 
 class AgentEvents(Protocol):
@@ -203,6 +218,8 @@ class Agent:
                     cancelled = self.cancel.cancelled
                     break
                 if not reply.tool_calls:
+                    if asks_for_approval(reply.content):
+                        self.events.status(NO_CALL_NOTICE, error=True)
                     break
                 self._run_skills(reply)
                 if self.cancel.cancelled:
