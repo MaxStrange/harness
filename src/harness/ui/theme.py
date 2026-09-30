@@ -15,6 +15,7 @@ def build_stylesheet(ui: UiConfig) -> str:
     QSplitter::handle:hover {{ background: {t.accent}; }}
     QFrame#panel, QWidget#panel {{ background: {t.surface}; border: 1px solid {t.border}; border-radius: 6px; }}
     QLabel#panelTitle {{ color: {t.text_muted}; font-weight: bold; padding: 4px 6px; background: transparent; border: none; }}
+    QLabel#sectionTitle {{ color: {t.text}; font-weight: bold; padding: 6px 6px 2px 6px; background: transparent; border: none; }}
     QScrollArea {{ border: none; background: {t.background}; }}
     QScrollArea > QWidget > QWidget {{ background: {t.background}; }}
     QScrollBar:vertical {{ background: {t.background}; width: 10px; margin: 0; }}

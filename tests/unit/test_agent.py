@@ -33,9 +33,10 @@ def make_agent(tmp_path, script, broker=None):
     cfg.security.deny_paths = []
     registry = SkillRegistry()
     registry.load_builtin()
-    services = Services(ui=RecordingUi(), task_lists=TaskListStore())
-    runner = SkillRunner(registry, broker or auto_approve_broker())
     store = SessionStore(cfg.sessions.db_path)
+    tasks = TaskListStore(store.load_task_list, store.save_task_list)  # as bootstrap wires it
+    services = Services(ui=RecordingUi(), task_lists=tasks)
+    runner = SkillRunner(registry, broker or auto_approve_broker())
     model = FakeModel(script=script)
     events = Recorder()
     agent = Agent(cfg, model, registry, runner, services, store, events)

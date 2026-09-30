@@ -212,7 +212,7 @@ def test_write_file_shows_diff_and_edits(registry, world):
 def test_task_list_round_trip_and_ui(registry, world):
     out = run(registry, world, "task_list", action="add", text="first")
     assert "[ ]" in out.result.content and out.result.handoff.action == "tasks"
-    task_id = world["services"].task_lists.get("s1").tasks[0].id
+    task_id = world["services"].task_lists.get("session:s1").tasks[0].id
     out = run(registry, world, "task_list", action="update", task_id=task_id, status="done")
     assert "[x]" in out.result.content
     assert world["services"].ui.opened and world["services"].ui.opened[0].action == "tasks"

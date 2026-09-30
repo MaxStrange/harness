@@ -23,8 +23,13 @@ RULES = """
   ("open the terminal for me", "show me that file"), call the relevant skill with `handoff: true`.
 - Relative paths are resolved against the session's working directory shown below.
 - Use `task_list` to keep a visible checklist during multi-step work, and `notify` when a long task ends.
+  In a project, `project_task_list` is the project's own list, shared by all its sessions: put
+  work that outlives this session there (or `move` a task across).
 - If a skill fails, read the error, fix the call or choose another approach; do not repeat the same call.
 """
+
+
+PROJECT_TASKS_SHOWN = 15  # open project tasks listed in the prompt
 
 
 def build_system_prompt(
@@ -37,6 +42,7 @@ def build_system_prompt(
     project_name: str | None = None,
     project_root: str | None = None,
     project_instructions: str | None = None,
+    project_tasks: list[str] | None = None,
 ) -> str:
     parts = [startup.strip(), RULES.strip()]
     if global_context and global_context.strip():
@@ -49,6 +55,14 @@ def build_system_prompt(
             lines.append(f"- Project root: {project_root}")
         if project_instructions and project_instructions.strip():
             lines.append(project_instructions.strip())
+        if project_tasks:
+            shown = project_tasks[:PROJECT_TASKS_SHOWN]
+            lines.append(
+                "Open project tasks (the project's list, shared by all its sessions; keep it "
+                "current with `project_task_list`):\n" + "\n".join(f"- {t}" for t in shown)
+            )
+            if len(project_tasks) > len(shown):
+                lines.append(f"(+{len(project_tasks) - len(shown)} more: project_task_list show)")
         parts.append("\n".join(lines))
     skill_lines = "\n".join(
         f"- `{s.name}`: {s.description.strip().splitlines()[0]}"

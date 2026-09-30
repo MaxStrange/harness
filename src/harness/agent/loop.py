@@ -31,6 +31,7 @@ from harness.paths import HarnessPaths
 from harness.skills.base import Handoff, Services, SkillContext
 from harness.skills.registry import SkillRegistry
 from harness.skills.runner import PendingApproval, SkillOutcome, SkillRunner
+from harness.skills.tasklist_store import project_key
 
 log = logging.getLogger(__name__)
 
@@ -110,8 +111,6 @@ class Agent:
         self.session = Session(
             record.id, Path(record.cwd), self.store.load_messages(session_id), record.project_id
         )
-        if self.services.task_lists is not None:
-            self.services.task_lists.load(session_id, self.store.load_tasks(session_id))
         self._ensure_system_prompt()
         return self.session
 
@@ -159,7 +158,18 @@ class Agent:
             project_name=project.name if project else None,
             project_root=project.root_dir if project else None,
             project_instructions=project.instructions if project else None,
+            project_tasks=self._project_tasks(project.id) if project else None,
         )
+
+    def _project_tasks(self, project_id: str) -> list[str]:
+        """The project's open tasks, for the prompt (the list itself is read on first use)."""
+        if self.services.task_lists is None:
+            return []
+        tasks = self.services.task_lists.get(project_key(project_id))
+        return [
+            f"{t.id}: {t.text}" + (" (in progress)" if t.status == "doing" else "")
+            for t in tasks.open_tasks()
+        ]
 
     # -- turns -----------------------------------------------------------------
 
@@ -270,6 +280,7 @@ class Agent:
                 config=self.config,
                 services=self.services,
                 session_id=self.session.id,
+                project_id=self.session.project_id,
                 cancel=self.cancel,
                 progress=self.events.status,
             )
@@ -292,10 +303,6 @@ class Agent:
                 handoff.to_dict() if handoff else None,
                 outcome.result.error,
             )
-            if self.services.task_lists is not None:
-                self.store.save_tasks(
-                    self.session.id, self.services.task_lists.get(self.session.id).to_json()
-                )
             self.events.skill_finished(outcome)
             if outcome.handoff_now and handoff is not None:
                 self.events.handoff_requested(handoff)

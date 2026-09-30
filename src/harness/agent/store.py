@@ -137,6 +137,8 @@ class SessionStore:
                 "UPDATE sessions SET position=? WHERE id=?", list(enumerate(ids))
             )
         project_columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(projects)")}
+        if "tasks" not in project_columns:
+            self._conn.execute("ALTER TABLE projects ADD COLUMN tasks TEXT")
         if "position" not in project_columns:
             self._conn.execute("ALTER TABLE projects ADD COLUMN position REAL")
             ids = [
@@ -325,6 +327,18 @@ class SessionStore:
             ).fetchone()
         return row["tasks"] if row else None
 
+    def load_task_list(self, key: str) -> str | None:
+        """A task list by its TaskListStore key: ``session:<id>`` or ``project:<id>``."""
+        table, row_id = _task_owner(key)
+        with self._lock:
+            row = self._conn.execute(f"SELECT tasks FROM {table} WHERE id=?", (row_id,)).fetchone()
+        return row["tasks"] if row else None
+
+    def save_task_list(self, key: str, tasks_json: str) -> None:
+        table, row_id = _task_owner(key)
+        with self._lock:
+            self._conn.execute(f"UPDATE {table} SET tasks=? WHERE id=?", (tasks_json, row_id))
+
     # -- messages ----------------------------------------------------------
 
     def append_message(self, session_id: str, message: Message) -> int:
@@ -512,6 +526,15 @@ def _fts_query(text: str) -> str:
     """Quote each word so punctuation in the user's query cannot break FTS syntax."""
     words = [w.replace('"', '""') for w in text.split()]
     return " ".join(f'"{w}"' for w in words)
+
+
+def _task_owner(key: str) -> tuple[str, str]:
+    """The table and row that hold the task list ``key`` (see harness.skills.tasklist_store)."""
+    kind, _, row_id = key.partition(":")
+    table = {"session": "sessions", "project": "projects"}.get(kind)
+    if table is None or not row_id:
+        raise ValueError(f"not a task list key: {key!r}")
+    return table, row_id
 
 
 def _record(row: sqlite3.Row) -> SessionRecord:
