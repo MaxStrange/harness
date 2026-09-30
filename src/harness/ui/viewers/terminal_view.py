@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from harness.config import TerminalConfig, ThemeConfig
 from harness.terminal.session import TerminalSession
+from harness.ui.keys import OWNS_ALL_KEYS
 
 log = logging.getLogger(__name__)
 
@@ -110,6 +111,8 @@ class TerminalView(QWidget):
         self.exit_bar.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         layout.addWidget(self.exit_bar, 0)
         self.view = QWebEngineView()
+        # Vim and the shell need Escape, Ctrl+N, Ctrl+Q ...: window shortcuts give way here.
+        self.setProperty(OWNS_ALL_KEYS, True)
         self.channel = QWebChannel(self.view.page())
         self.bridge = TerminalBridge(session)
         self.channel.registerObject("terminal", self.bridge)
