@@ -36,6 +36,7 @@ from harness.ui.critter import CRITTERS, StatusStrip
 from harness.ui.dock import Dock
 from harness.ui.file_explorer import FileExplorer
 from harness.ui.handoff import HandoffExecutor
+from harness.ui.keys import install_key_guard
 from harness.ui.orbit_explorer import OrbitExplorer
 from harness.ui.project_dialogs import ProjectDialog, TextFileDialog
 from harness.ui.sessions_panel import SessionsPanel
@@ -95,6 +96,7 @@ class MainWindow(QMainWindow):
         self, core: HarnessCore, agent: Agent, controller: AgentController, ui_bridge: QtUiBridge
     ) -> None:
         super().__init__()
+        install_key_guard()  # the terminal gets Escape etc. (Vim), not the window shortcuts
         self.core = core
         self.agent = agent
         self.controller = controller

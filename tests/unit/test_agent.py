@@ -74,7 +74,7 @@ def test_system_prompt_mentions_rules_and_skills(tmp_path):
     assert "get_url_raw" in prompt and "ALWAYS needs the user's approval" in prompt
     assert "Prefer a dedicated skill" in prompt
     assert str(tmp_path) in prompt
-    assert "`terminal`" in prompt and "(needs approval)" in prompt
+    assert "`terminal`" in prompt and "(the user approves each call)" in prompt
 
 
 def test_agent_plain_reply_streams_and_persists(tmp_path):
@@ -189,3 +189,33 @@ def test_agent_compaction_and_task_persistence(tmp_path):
     agent.send("more " * 50)
     assert events.named("compacted")
     assert any(m.content.startswith("[Summary") for m in store.load_messages(session.id))
+
+
+def test_a_reply_asking_for_approval_without_a_call_gets_a_notice(tmp_path):
+    """The README bug: the model wrote "please approve" and called nothing, so no button came."""
+    from harness.agent.loop import NO_CALL_NOTICE
+
+    agent, model, store, events = make_agent(
+        tmp_path,
+        [
+            "I'll create README.md at the project root. Please approve the file creation.",
+            "README.md is written.",
+        ],
+    )
+    agent.new_session(tmp_path)
+    agent.send("make a readme")
+    assert ("status", (NO_CALL_NOTICE,)) in [(n, a[:1]) for n, a in events.calls]
+    events.calls.clear()
+    agent.send("thanks")  # an ordinary reply: no notice
+    assert not [c for c in events.calls if c[0] == "status" and c[1][0] == NO_CALL_NOTICE]
+
+
+def test_prompt_and_tools_say_approval_comes_from_calling(tmp_path):
+    from harness.skills.registry import SkillRegistry
+
+    registry = SkillRegistry()
+    registry.load_builtin()
+    write = next(t for t in registry.tool_specs() if t.name == "write_file")
+    assert "just call it" in write.description and "Requires user approval" not in write.description
+    prompt = build_system_prompt("Hi.", tmp_path, registry.all())
+    assert "CALL THE SKILL" in prompt and "nothing for the user to approve" in prompt

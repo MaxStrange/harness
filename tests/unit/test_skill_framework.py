@@ -135,7 +135,7 @@ def test_contract_validation_reports_missing_pieces():
 def test_tool_spec_adds_handoff_param_and_marks_approval():
     spec = tool_spec_for(Dangerous())
     assert "handoff" in spec.parameters["properties"]
-    assert "Requires user approval" in spec.description
+    assert "asks the user to approve" in spec.description and "just call it" in spec.description
     assert "Handoff: Terminal." in spec.description
 
 
