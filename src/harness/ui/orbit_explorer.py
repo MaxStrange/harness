@@ -210,6 +210,7 @@ class OrbitExplorer(QWidget):
     cwd_requested = Signal(str)
     file_selected = Signal(str)  # a file at the front was clicked: its absolute path
     reveal_requested = Signal(str)  # show this path in the system file manager
+    terminal_requested = Signal(str)  # open the harness terminal in this folder
     directory_changed = Signal(str)
 
     mouse_roll_changed = Signal(bool)  # the user toggled mouse roll in the menu
@@ -856,7 +857,10 @@ class OrbitExplorer(QWidget):
         return round(position) % len(ring.entries)
 
     def contextMenuEvent(self, event) -> None:
-        pos = QPointF(event.pos())
+        self.context_menu(QPointF(event.pos())).exec(event.globalPos())
+
+    def context_menu(self, pos: QPointF) -> QMenu:
+        """The right-click menu for whatever is at ``pos`` (an item, or the empty ring)."""
         hit = self.item_at(pos)
         menu = QMenu(self)
         current = self.current_path()
@@ -868,6 +872,10 @@ class OrbitExplorer(QWidget):
             menu.addAction("Use as working directory", lambda: self.cwd_requested.emit(directory))
             if entry.is_dir:
                 menu.addAction("Expand", lambda: self.expand(entry))
+                menu.addAction(
+                    "Open in terminal",
+                    lambda: self.terminal_requested.emit(os.path.abspath(entry.path)),
+                )
             else:
                 menu.addAction(
                     "Open in editor", lambda: self.open_requested.emit(os.path.abspath(entry.path))
@@ -879,6 +887,9 @@ class OrbitExplorer(QWidget):
         else:
             menu.addAction(
                 "Use this directory as working directory", lambda: self.cwd_requested.emit(current)
+            )
+            menu.addAction(
+                "Open in terminal", lambda: self.terminal_requested.emit(os.path.abspath(current))
             )
         reveal_target = (
             hit[1].entry.path if (hit is not None and not hit[1].entry.is_parent) else current
@@ -898,7 +909,7 @@ class OrbitExplorer(QWidget):
         roll.toggled.connect(self.set_mouse_roll)
         roll.toggled.connect(self.mouse_roll_changed.emit)
         menu.addAction("Refresh", self.refresh)
-        menu.exec(event.globalPos())
+        return menu
 
     # -- labels -------------------------------------------------------------------------
 

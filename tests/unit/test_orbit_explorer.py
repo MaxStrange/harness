@@ -409,3 +409,28 @@ def test_paints_offscreen(explorer, tree):
         explorer._tick()  # mid-flight: both rings drawn
     image = explorer.grab().toImage()
     assert not image.isNull() and image.width() == 400
+
+
+def menu_actions(explorer, pos, monkeypatch=None):
+    """The context menu at ``pos``, as {text: action}, without showing it."""
+    return {a.text(): a for a in explorer.context_menu(pos).actions() if a.text()}
+
+
+def test_context_menu_opens_a_folder_in_the_terminal(explorer, tree, monkeypatch):
+    opened = []
+    explorer.terminal_requested.connect(opened.append)
+    docs = next(g for g in explorer.item_geometry(explorer.current) if g.entry.name == "docs")
+    actions = menu_actions(explorer, docs.pos, monkeypatch)
+    assert "Open in terminal" in actions
+    actions["Open in terminal"].trigger()
+    assert opened == [str(tree / "docs")]
+    readme = next(
+        g for g in explorer.item_geometry(explorer.current) if g.entry.name == "README.md"
+    )
+    explorer.bring_to_front(explorer.current, readme.index, animate=False)
+    explorer.settle()
+    readme = front_item(explorer)
+    assert "Open in terminal" not in menu_actions(explorer, readme.pos, monkeypatch)  # a file
+    empty = menu_actions(explorer, QPointF(5, explorer.height() - 5), monkeypatch)
+    empty["Open in terminal"].trigger()  # empty space: the folder being shown
+    assert opened[-1] == str(tree)

@@ -577,3 +577,40 @@ def test_dragging_a_session_into_a_project_adopts_its_root(qtbot, window, tmp_pa
     open_id = win.agent.session.id
     assert win.sessions.drop(win.sessions._find(open_id), header(), "on")
     assert win.agent.session.project_id == project.id and win.agent.session.cwd == root
+
+
+def test_open_in_terminal_uses_an_idle_shell_or_a_new_tab(qtbot, window, tmp_path, monkeypatch):
+    win, model, core = window
+
+    class Shell:
+        def __init__(self, name, idle):
+            self.name, self.idle, self.typed, self.alive = name, idle, [], True
+            self.shell_kind = "powershell"
+
+        def type_command(self, command):
+            if self.idle:
+                self.typed.append(command)
+            return self.idle
+
+    main = Shell("main", idle=True)
+    created = []
+    monkeypatch.setattr(core.terminals, "get", lambda name: main if name == "main" else None)
+    monkeypatch.setattr(
+        core.terminals,
+        "get_or_create",
+        lambda name, cwd: created.append((name, cwd)) or Shell(name, True),
+    )
+    shown = []
+    monkeypatch.setattr(win.terminal_panel, "add_session", lambda s: None)
+    monkeypatch.setattr(win.terminal_panel, "alive_names", lambda: ["main"])  # it was added
+    monkeypatch.setattr(win.terminal_panel, "show_session", shown.append)
+    folder = tmp_path / "proj"
+    folder.mkdir()
+    assert win.open_in_terminal(str(folder)) == "main"
+    assert main.typed == [f"Set-Location -LiteralPath '{folder}'"] and created == []
+    assert win.dock.active == "terminal" and shown == ["main"]
+    main.idle = False  # Vim is open: never type into it
+    name = win.open_in_terminal(str(folder))
+    assert name == "proj" and created == [("proj", str(folder))] and len(main.typed) == 1
+    win.explorer.terminal_requested.emit(str(folder))  # the explorer's menu is wired up
+    assert len(created) == 2

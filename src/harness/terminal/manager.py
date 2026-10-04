@@ -38,6 +38,15 @@ class TerminalManager:
         with self._lock:
             return list(self._sessions)
 
+    def free_name(self, base: str) -> str:
+        """``base``, or ``base 2``, ``base 3`` ... whichever no live session uses."""
+        with self._lock:
+            taken = {n for n, s in self._sessions.items() if s.alive}
+        name, n = base, 2
+        while name in taken:
+            name, n = f"{base} {n}", n + 1
+        return name
+
     def get_or_create(self, name: str, cwd: str) -> TerminalSession:
         with self._lock:
             session = self._sessions.get(name)
