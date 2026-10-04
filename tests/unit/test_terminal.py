@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import shutil
 import sys
+import time
 
 import pytest
 
@@ -257,5 +258,38 @@ def test_real_powershell_git_output_is_not_paged(tmp_path):
         forced = session.run_command("$env:GIT_PAGER = 'less'; git log --oneline", timeout=60)
         assert forced.paged and not forced.timed_out and "commit 59" in forced.output
         assert session.run_command("echo back", timeout=20).output == "back"
+    finally:
+        session.close()
+
+
+@powershell_only
+def test_real_powershell_type_command_only_when_idle(tmp_path):
+    import threading
+
+    from harness.terminal.session import cd_command
+
+    target = tmp_path / "it's a folder"
+    target.mkdir()
+    session = TerminalSession("t", "powershell.exe", str(tmp_path))
+    session.start()
+    try:
+        assert session.wait_for_prompt(30) and session.is_idle()
+        session.write("half-typed junk")  # something already on the line is cleared first
+        assert session.type_command(cd_command(target, session.shell_kind))
+        assert session.wait_for_prompt(20)
+        deadline = time.time() + 20
+        while time.time() < deadline:  # the typed command runs asynchronously
+            where = session.run_command("(Get-Location).Path", timeout=20).output
+            if where == str(target):
+                break
+            time.sleep(0.2)
+        assert where == str(target)
+        # While something runs (here a command the model is waiting on) nothing is typed.
+        runner = threading.Thread(target=lambda: session.run_command("Start-Sleep 3", timeout=20))
+        runner.start()
+        time.sleep(1)
+        assert not session.is_idle() and not session.type_command("echo nope")
+        runner.join()
+        assert session.wait_for_prompt(10) and session.is_idle()
     finally:
         session.close()

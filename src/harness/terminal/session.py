@@ -62,6 +62,22 @@ class TerminalBusy(Exception):
     """The shell is not at a prompt (a program is running) or another command is in flight."""
 
 
+def quote_path(path, shell_kind: str = "bash") -> str:
+    """``path`` quoted for the shell (PowerShell single quotes, POSIX single quotes)."""
+    text = str(path)
+    if shell_kind == "powershell":
+        return "'" + text.replace("'", "''") + "'"
+    if all(ch.isalnum() or ch in "/_-.~:\\" for ch in text):
+        return text
+    return "'" + text.replace("'", "'\\''") + "'"
+
+
+def cd_command(path, shell_kind: str) -> str:
+    if shell_kind == "powershell":
+        return f"Set-Location -LiteralPath {quote_path(path, shell_kind)}"
+    return f"cd {quote_path(path)}"
+
+
 def shell_kind_for(shell_path: str) -> str:
     name = Path(shell_path).name.lower()
     if name.startswith(("powershell", "pwsh")):
@@ -244,6 +260,28 @@ class TerminalSession:
                 log.exception("terminal subscriber failed")
 
     # -- commands ------------------------------------------------------------
+
+    def is_idle(self) -> bool:
+        """At its prompt with nothing running: not Vim, not a command the model is waiting on."""
+        with self._cond:
+            at_prompt = self._at_prompt
+        return self.alive and at_prompt and not self._command_lock.locked()
+
+    def type_command(self, command: str) -> bool:
+        """Type ``command`` at the prompt as if the user had (it shows and goes into history).
+
+        Anything half-typed on the line is cleared first. Returns False, typing nothing, when the
+        shell is not idle, so a running program never receives the keystrokes.
+        """
+        if not self.is_idle():
+            return False
+        if self.shell_kind == "powershell":
+            # End, then Ctrl+Home (PSReadLine: delete back to the start). Whole VT sequences: a
+            # lone Esc followed by text reaches PSReadLine as Alt+<key> and garbles the command.
+            self.write("\x1b[F\x1b[1;5H" + command + "\r")
+        else:
+            self.write("\x05\x15" + command + "\n")  # Ctrl+E Ctrl+U: clear the line
+        return True
 
     def wait_for_prompt(self, timeout: float = 10.0) -> bool:
         with self._cond:

@@ -28,7 +28,7 @@ from harness.bootstrap import HarnessCore
 from harness.config import ThemeConfig, set_config_value
 from harness.skills.base import ApprovalDecision, Handoff
 from harness.skills.runner import SkillOutcome
-from harness.terminal.session import TerminalSession
+from harness.terminal.session import TerminalSession, cd_command
 from harness.ui.bridge import AgentController, QtUiBridge
 from harness.ui.chat.chat_view import ChatView
 from harness.ui.chat.composer import Composer
@@ -159,6 +159,7 @@ class MainWindow(QMainWindow):
             self.explorer.reveal_requested.connect(
                 lambda path: self.perform_handoff(Handoff.file_manager(path))
             )
+            self.explorer.terminal_requested.connect(self.open_in_terminal)
         else:
             self.explorer = FileExplorer(explorer_root)
         self.explorer.open_requested.connect(
@@ -408,6 +409,28 @@ class MainWindow(QMainWindow):
         self.chat.add_notice(f"Deleted {count} session(s).")
 
     # -- preferences -------------------------------------------------------------------
+
+    def open_in_terminal(self, folder: str) -> str:
+        """Show the terminal in ``folder``; returns the name of the terminal session used.
+
+        An idle main shell changes directory there, visibly, as if you had typed the cd. A
+        busy one (Vim, or a command the model is running) is left alone and a new terminal tab
+        opens in the folder instead.
+        """
+        terminals = self.core.terminals
+        main = terminals.get("main")
+        if main is not None and main.alive:
+            if main.type_command(cd_command(folder, main.shell_kind)):
+                session = main
+            else:
+                name = terminals.free_name(Path(folder).name or folder)
+                session = terminals.get_or_create(name, folder)
+        else:
+            session = terminals.get_or_create("main", folder)
+        self.terminal_panel.add_session(session)
+        self.show_view("terminal")
+        self.terminal_panel.show_session(session.name)
+        return session.name
 
     def apply_preference(self, name: str, value: str | bool) -> str | None:
         """Change a preference now and persist it to the config file. Returns an error or None."""

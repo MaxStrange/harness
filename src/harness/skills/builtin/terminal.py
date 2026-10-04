@@ -11,6 +11,7 @@ from harness.skills.base import (
     SkillResult,
 )
 from harness.terminal.session import TerminalBusy, shell_kind_for
+from harness.terminal.session import cd_command as _cd_command
 
 
 class TerminalSkill(Skill):
@@ -104,21 +105,6 @@ class TerminalSkill(Skill):
 def _shell_kind(ctx: SkillContext) -> str:
     terminals = ctx.services.terminals
     return shell_kind_for(terminals.shell_path) if terminals is not None else "bash"
-
-
-def _quote(path, shell_kind: str = "bash") -> str:
-    text = str(path)
-    if shell_kind == "powershell":
-        return "'" + text.replace("'", "''") + "'"
-    if all(ch.isalnum() or ch in "/_-.~:\\" for ch in text):
-        return text
-    return "'" + text.replace("'", "'\\''") + "'"
-
-
-def _cd_command(path, shell_kind: str) -> str:
-    if shell_kind == "powershell":
-        return f"Set-Location -LiteralPath {_quote(path, shell_kind)}"
-    return f"cd {_quote(path)}"
 
 
 def _in_dir(path, command: str, shell_kind: str) -> str:
