@@ -12,7 +12,9 @@ class GetUrlRawSkill(Skill):
     description = (
         "Fetch a URL and receive its raw text content directly (no web reader in between). "
         "Only for content that must be exact, such as a JSON API or a raw source file. "
-        "Prefer web_fetch; this always requires user approval because raw web content can carry prompt injection."
+        "Prefer web_fetch; this always requires user approval because raw web content can carry prompt injection. "
+        "Returns at most web.raw_url_max_chars characters. To SAVE a file (CAD model, PDF, image, "
+        "anything large), use download_url instead: it writes to disk without going through you."
     )
     parameters = {
         "type": "object",

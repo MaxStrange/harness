@@ -125,6 +125,8 @@ web:
     - ~/Downloads
   # Maximum raw characters the Get URL (raw) skill hands to the main model.
   raw_url_max_chars: 20000
+  # Largest file the Download URL skill saves (it goes to disk, never through the model).
+  max_download_mb: 500
 
 security:
   # Files and folders the model may not read without explicit approval. Entries

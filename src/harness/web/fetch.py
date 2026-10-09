@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 
@@ -96,6 +97,54 @@ class SafeFetcher:
                 return FetchedPage(
                     url, current, response.status_code, content_type, text, "", [], truncated
                 )
+        raise FetchError(
+            f"too many redirects (more than {self.config.max_redirects}) fetching {url}"
+        )
+
+    def download(
+        self, url: str, destination: Path, max_bytes: int, cancel=None
+    ) -> tuple[str, int, str]:
+        """Stream ``url`` into ``destination`` (never through memory or the model).
+
+        Same checks as fetch: the network policy on every redirect hop, no cookies. Written to
+        ``<destination>.part`` and renamed only when complete; over ``max_bytes`` it stops and
+        deletes the partial file. Returns (final URL, size, content type).
+        """
+        current = url
+        partial = destination.with_name(destination.name + ".part")
+        with self._client() as client:
+            for _hop in range(self.config.max_redirects + 1):
+                self.policy.check_url(current)
+                try:
+                    with client.stream("GET", current, headers={"Accept": "*/*"}) as response:
+                        client.cookies.clear()
+                        if 300 <= response.status_code < 400 and response.headers.get("location"):
+                            current = str(response.url.join(response.headers["location"]))
+                            log.info("redirect -> %s", current)
+                            continue
+                        if response.status_code >= 400:
+                            raise FetchError(f"HTTP {response.status_code} fetching {current}")
+                        size = 0
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        with open(partial, "wb") as out:
+                            for chunk in response.iter_bytes():
+                                if cancel is not None and cancel.cancelled:
+                                    raise FetchError("download cancelled")
+                                size += len(chunk)
+                                if size > max_bytes:
+                                    raise FetchError(
+                                        f"{current} is larger than the download limit "
+                                        f"({max_bytes // 2**20} MB, web.max_download_mb)"
+                                    )
+                                out.write(chunk)
+                        partial.replace(destination)
+                        return current, size, response.headers.get("content-type", "")
+                except httpx.HTTPError as exc:
+                    partial.unlink(missing_ok=True)
+                    raise FetchError(f"{exc.__class__.__name__} fetching {current}: {exc}") from exc
+                except FetchError:
+                    partial.unlink(missing_ok=True)
+                    raise
         raise FetchError(
             f"too many redirects (more than {self.config.max_redirects}) fetching {url}"
         )
