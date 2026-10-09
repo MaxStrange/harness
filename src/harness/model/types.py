@@ -42,11 +42,26 @@ class ToolCall:
         return {
             "id": self.id,
             "type": "function",
-            "function": {
-                "name": self.name,
-                "arguments": self.raw_arguments or json.dumps(self.arguments),
-            },
+            "function": {"name": self.name, "arguments": self.api_arguments()},
         }
+
+    def api_arguments(self) -> str:
+        """The arguments as sent back in the history: always valid JSON.
+
+        A call whose arguments did not parse (typically cut off at max_tokens) is replayed as
+        ``{}``: llama.cpp's chat template parses every past call's arguments, and one broken
+        call would make every later request in the session fail with HTTP 500. The tool result
+        that follows already tells the model what went wrong.
+        """
+        raw = self.raw_arguments
+        if raw:
+            try:
+                if isinstance(json.loads(raw), dict):
+                    return raw
+            except ValueError:
+                pass
+            return json.dumps(self.arguments) if self.arguments else "{}"
+        return json.dumps(self.arguments)
 
 
 @dataclass

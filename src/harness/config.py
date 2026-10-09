@@ -211,6 +211,7 @@ class WebConfig(StrictModel):
         default_factory=lambda: [_in_home("downloads"), "~/Downloads"]
     )
     raw_url_max_chars: int = Field(default=20000, gt=0)
+    max_download_mb: int = Field(default=500, gt=0)
 
     @field_validator("searxng_url")
     @classmethod
