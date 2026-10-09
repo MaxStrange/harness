@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+<!-- The 3D model viewer: three.js in QtWebEngine. The model's bytes arrive from Python over
+     QWebChannel (file:// pages cannot fetch local files). Left drag rotates, Shift+left drag
+     (or right drag) pans, the wheel zooms. -->
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: var(--bg, #2b3137); color: var(--text, #e6e9ec); font: 12px sans-serif; }
+  #view { position: absolute; inset: 0; }
+  #message { position: absolute; inset: 0; display: flex; align-items: center;
+             justify-content: center; text-align: center; padding: 24px; pointer-events: none;
+             color: var(--muted, #a3adb7); white-space: pre-line; }
+</style>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script src="three-bundle.js"></script>
+</head>
+<body>
+<div id="view"></div>
+<div id="message">No model open</div>
+<script src="viewer.js"></script>
+</body>
+</html>
