@@ -41,6 +41,7 @@ from harness.ui.orbit_explorer import OrbitExplorer
 from harness.ui.project_dialogs import ProjectDialog, TextFileDialog
 from harness.ui.sessions_panel import SessionsPanel
 from harness.ui.viewers.image_viewer import ImageViewer
+from harness.ui.viewers.model_viewer import ModelViewer
 from harness.ui.viewers.task_list_view import TaskListView
 from harness.ui.viewers.terminal_view import TerminalPanel
 
@@ -114,6 +115,7 @@ class MainWindow(QMainWindow):
         self.dock = Dock(self.theme, ui.panels.dock_width)
         self.dock.add_item("terminal", "Terminal", ">_")
         self.dock.add_item("image", "Image viewer", "▣")
+        self.dock.add_item("model", "3D viewer", "⬡")
         self.dock.add_item("tasks", "Task list", "☑")
         self.dock.item_clicked.connect(self.toggle_view)
 
@@ -121,10 +123,12 @@ class MainWindow(QMainWindow):
         self.side_panel.setObjectName("panel")
         self.terminal_panel = TerminalPanel(self.config.terminal, self.theme)
         self.image_viewer = ImageViewer()
+        self.model_viewer = ModelViewer(self.theme)
         self.task_view = TaskListView(core.task_lists)
         self._views = {
             "terminal": self.terminal_panel,
             "image": self.image_viewer,
+            "model": self.model_viewer,
             "tasks": self.task_view,
         }
         for view in self._views.values():
@@ -160,6 +164,9 @@ class MainWindow(QMainWindow):
                 lambda path: self.perform_handoff(Handoff.file_manager(path))
             )
             self.explorer.terminal_requested.connect(self.open_in_terminal)
+            self.explorer.model_requested.connect(
+                lambda path: self.perform_handoff(Handoff.model(path))
+            )
         else:
             self.explorer = FileExplorer(explorer_root)
         self.explorer.open_requested.connect(
@@ -264,6 +271,7 @@ class MainWindow(QMainWindow):
         view_menu = self.menuBar().addMenu("&View")
         view_menu.addAction(self._action("Terminal", lambda: self.show_view("terminal"), "Ctrl+`"))
         view_menu.addAction(self._action("Image viewer", lambda: self.show_view("image")))
+        view_menu.addAction(self._action("3D viewer", lambda: self.show_view("model")))
         view_menu.addAction(self._action("Task list", lambda: self.show_view("tasks")))
         view_menu.addAction(self._action("Hide side panel", self.hide_side_panel))
         view_menu.addSeparator()
@@ -675,6 +683,12 @@ class MainWindow(QMainWindow):
             if handoff.target:
                 self.image_viewer.show_image(handoff.target)
             self.show_view("image")
+        elif handoff.action == "model":
+            if handoff.target:
+                error = self.model_viewer.show_model(handoff.target)
+                if error:
+                    self._on_status(error, True)
+            self.show_view("model")
         elif handoff.action == "tasks":
             self.show_view("tasks")
         elif handoff.action == "explorer":

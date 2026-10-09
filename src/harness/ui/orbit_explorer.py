@@ -95,6 +95,7 @@ WHEEL_STEP_DEGREES = 15.0  # one wheel notch = one item
 PIXEL_STEP = 40.0  # touchpad pixel travel per item
 DRAG_THRESHOLD = 5.0  # px before a press becomes a drag
 PARENT_NAME = ".."
+MODEL_SUFFIXES = (".glb", ".gltf", ".stl", ".obj")  # what the 3D viewer opens
 
 
 @dataclass
@@ -211,6 +212,7 @@ class OrbitExplorer(QWidget):
     file_selected = Signal(str)  # a file at the front was clicked: its absolute path
     reveal_requested = Signal(str)  # show this path in the system file manager
     terminal_requested = Signal(str)  # open the harness terminal in this folder
+    model_requested = Signal(str)  # show this 3D model in the embedded viewer
     directory_changed = Signal(str)
 
     mouse_roll_changed = Signal(bool)  # the user toggled mouse roll in the menu
@@ -884,6 +886,11 @@ class OrbitExplorer(QWidget):
                     "Put path in message",
                     lambda: self.file_selected.emit(os.path.abspath(entry.path)),
                 )
+                if entry.name.lower().endswith(MODEL_SUFFIXES):
+                    menu.addAction(
+                        "Open in 3D viewer",
+                        lambda: self.model_requested.emit(os.path.abspath(entry.path)),
+                    )
         else:
             menu.addAction(
                 "Use this directory as working directory", lambda: self.cwd_requested.emit(current)

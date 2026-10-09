@@ -17,7 +17,7 @@ class Generate3DModelSkill(Skill):
         "Make a 3D model (an untextured GLB mesh) with Hunyuan3D-2mini on the LLM machine, from "
         "an image file or, with 'prompt', from a text description (an image is generated first). "
         "Works best on one object, whole and centred, on a plain background. A preview is shown "
-        "in the image viewer; the GLB opens in the default 3D viewer. Loading the models can "
+        "in the image viewer and the GLB opens in the harness's 3D viewer. Loading the models can "
         "take a few minutes. Saved under ~/.harness/generated unless you give a path."
     )
     parameters = {
@@ -34,7 +34,7 @@ class Generate3DModelSkill(Skill):
         },
     }
     timeout_s = 1500  # up to two model swaps plus two jobs
-    handoff_description = "The GLB opens in the default 3D viewer; a preview shows in the viewer."
+    handoff_description = "The GLB opens in the harness's 3D viewer."
 
     def approval_request(self, args, ctx):
         for key, action in (("image", "read"), ("path", "write")):
@@ -84,8 +84,7 @@ class Generate3DModelSkill(Skill):
         if result.get("preview_png_base64"):
             preview = glb.with_name(glb.stem + "-preview.png")
             write_b64(preview, result["preview_png_base64"])
-            ctx.services.ui.open_embedded(Handoff.image(preview))
-            notes.append(f"preview {preview} (showing in the image viewer)")
+            notes.append(f"preview image {preview}")
         summary = (
             f"Generated {glb} ({human_size(size)}, {result['vertices']} vertices, "
             f"{result['faces']} faces, seed {result['seed']}, {result['seconds']}s), "
@@ -93,8 +92,11 @@ class Generate3DModelSkill(Skill):
         )
         if notes:
             summary += " Also: " + "; ".join(notes) + "."
+        handoff = Handoff.model(glb)
+        ctx.services.ui.open_embedded(handoff)  # straight into the 3D viewer
+        summary += " It is showing in the 3D viewer."
         return SkillResult(
             summary,
-            Handoff.default_app(glb, label="Open 3D model"),
+            handoff,
             data={"path": str(glb), "seed": result["seed"]},
         )

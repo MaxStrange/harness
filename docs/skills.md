@@ -50,7 +50,8 @@ to the user, and `handoff` is offered as a button (or performed immediately when
 - `Handoff.editor(path, line)`, `Handoff.file_manager(path)`, `Handoff.browser(url)`,
   `Handoff.default_app(target)`: external, performed with the configured editor / the platform's
   file manager / the default application.
-- `Handoff.terminal(cwd, session)`, `Handoff.image(path)`, `Handoff.tasks()`: embedded views inside
+- `Handoff.terminal(cwd, session)`, `Handoff.image(path)`, `Handoff.model(path)` (3D viewer),
+  `Handoff.tasks()`: embedded views inside
   the harness. Adding a new embedded view means adding it to `EMBEDDED_VIEWS` in
   `skills/base.py`, a widget under `ui/viewers/`, and a case in `MainWindow.show_embedded`.
 - `Handoff.done(label)`: the skill itself was the handoff (clipboard, notification).

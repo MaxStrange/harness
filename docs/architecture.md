@@ -90,8 +90,8 @@ before the bytes reach xterm.js.
 
 ## Next steps
 
-- An embedded 3D viewer for `generate_3d_model` (today: a rendered preview in the image viewer
-  and the GLB handed to the default app), textured meshes (Hunyuan's texture stage needs a CUDA
+- STEP files in the 3D viewer (occt-import-js, OpenCascade as WebAssembly, would read them in
+  the page), textured meshes (Hunyuan's texture stage needs a CUDA
   rasterizer ported to ROCm), and animation generation.
 - The stack serialises swaps within one harness, but a second session calling the main model
   while a skill has it unloaded makes the router load it again; a lease across sessions would

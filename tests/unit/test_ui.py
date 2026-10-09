@@ -614,3 +614,17 @@ def test_open_in_terminal_uses_an_idle_shell_or_a_new_tab(qtbot, window, tmp_pat
     assert name == "proj" and created == [("proj", str(folder))] and len(main.typed) == 1
     win.explorer.terminal_requested.emit(str(folder))  # the explorer's menu is wired up
     assert len(created) == 2
+
+
+def test_models_open_in_the_3d_viewer(qtbot, window, tmp_path, monkeypatch):
+    win, model, core = window
+    shown, errors = [], []
+    monkeypatch.setattr(win.model_viewer, "show_model", lambda path: shown.append(path))
+    win.perform_handoff(Handoff.model(tmp_path / "part.glb"))
+    assert shown == [str(tmp_path / "part.glb")] and win.dock.active == "model"
+    win.explorer.model_requested.emit(str(tmp_path / "b.stl"))  # the explorer's menu is wired
+    assert shown[-1] == str(tmp_path / "b.stl")
+    monkeypatch.setattr(win.model_viewer, "show_model", lambda path: "b.step: not a model")
+    monkeypatch.setattr(win, "_on_status", lambda text, error=False: errors.append(text))
+    win.perform_handoff(Handoff.model(tmp_path / "b.step"))
+    assert errors == ["b.step: not a model"]  # reported, not swallowed

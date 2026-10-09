@@ -72,6 +72,16 @@ stack if the job is big enough, or if the component is marked `exclusive`), load
 and reloads what it unloaded before the main model sees the result. The status line shows each
 step. `harness --stack-check` prints what is loaded now.
 
+### 3D viewer
+
+The dock's 3D viewer shows GLB, glTF, STL and OBJ files for a quick look during part selection:
+left drag rotates, Shift+left drag (or right drag) pans, the wheel zooms, and Reset view goes back to
+the fitted view. Open one from the explorer (right-click > Open in 3D viewer), ask the model
+(`view_3d_model`), or generate one (`generate_3d_model` opens its result there). STEP is not
+supported yet. It is three.js running in QtWebEngine, bundled into one script under
+`src/harness/ui/viewers/model_web/` (`build/build.sh` rebuilds it); there are no extra Python
+dependencies.
+
 ## Checking the stack
 
 ```bash
