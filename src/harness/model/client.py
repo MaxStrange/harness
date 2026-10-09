@@ -183,7 +183,12 @@ class OpenAICompatClient:
             plog.info("CANCELLED %s after %.1fs", self.name, time.monotonic() - started)
             raise
         except httpx.HTTPStatusError as exc:
-            detail = exc.response.text[:2000]
+            try:
+                exc.response.read()  # a streamed response: its body has not been read yet
+                detail = exc.response.text[:2000]
+            except httpx.HTTPError as read_error:
+                detail = f"(the error body could not be read: {read_error})"
+
             plog.error("HTTP %s from %s: %s", exc.response.status_code, self.name, detail)
             yield StreamError(f"HTTP {exc.response.status_code} from {self.name}: {detail}")
         except httpx.HTTPError as exc:
@@ -248,6 +253,10 @@ class OpenAICompatClient:
             if tail:
                 yield TextDelta(tail)
         tool_calls = [_finish_tool_call(i, slot) for i, slot in sorted(pending.items())]
+        if finish_reason == "length":
+            for call in tool_calls:
+                if call.parse_error:
+                    call.parse_error = cut_off_explanation(body.get("max_tokens"))
         if tools and self.tool_format == "text":
             full_text, parsed = text_tools.parse_tool_calls(full_text)
             tool_calls.extend(parsed)
@@ -262,6 +271,16 @@ class OpenAICompatClient:
 
     def close(self) -> None:
         self._client.close()
+
+
+def cut_off_explanation(max_tokens: int | None) -> str:
+    limit = f" ({max_tokens} tokens)" if max_tokens else ""
+    return (
+        f"your reply hit the output limit{limit} before this call's arguments were complete, "
+        "so the call was not made. Do not pass large content, such as a whole file, as an "
+        "argument: to save something from the web use download_url, which writes it straight "
+        "to disk; write long text in smaller pieces"
+    )
 
 
 def _finish_tool_call(index: int, slot: dict[str, str]) -> ToolCall:
