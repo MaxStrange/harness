@@ -139,6 +139,7 @@ class WebReaderConfig(StrictModel):
 
 
 GEN_SERVICE_URL = "http://10.0.0.228:18083"
+SUPERRES_SERVICE_URL = "http://10.0.0.228:18084"
 
 
 class StackComponent(StrictModel):
@@ -183,6 +184,9 @@ def _default_components() -> dict[str, StackComponent]:
         ),
         "image": StackComponent(kind="service", name="image", url=GEN_SERVICE_URL, gib=42),
         "mesh": StackComponent(kind="service", name="mesh", url=GEN_SERVICE_URL, gib=9),
+        "superres": StackComponent(
+            kind="service", name="superres", url=SUPERRES_SERVICE_URL, api_key_file=key, gib=3
+        ),
     }
 
 

@@ -9,15 +9,31 @@ from pathlib import Path
 
 import httpx
 
+from harness.config import ConfigError, Endpoint
 from harness.paths import HarnessPaths
 from harness.skills.base import SkillContext, SkillError
 
 
-def service_url(ctx: SkillContext, component: str) -> str:
+def _component(ctx: SkillContext, component: str):
     comp = ctx.config.models.stack.components.get(component)
     if comp is None or comp.kind != "service":
         raise SkillError(f"no generation service is configured for {component!r} (models.stack)")
-    return comp.url
+    return comp
+
+
+def service_url(ctx: SkillContext, component: str) -> str:
+    return _component(ctx, component).url
+
+
+def _auth_headers(comp) -> dict[str, str]:
+    """The component's API key, if it has one (the generation service has none)."""
+    if not comp.api_key_file:
+        return {}
+    try:
+        key = Endpoint(base_url=comp.url, api_key_file=comp.api_key_file).resolve_api_key()
+    except ConfigError as exc:
+        raise SkillError(f"{comp.name}: {exc}") from exc
+    return {"Authorization": f"Bearer {key}"}
 
 
 def make_room(ctx: SkillContext, component: str) -> None:
@@ -36,9 +52,10 @@ def make_room(ctx: SkillContext, component: str) -> None:
 def call_service(ctx: SkillContext, component: str, path: str, payload: dict, timeout_s: float):
     """POST a job to the generation service and return its JSON."""
     ctx.check_cancelled()
-    url = service_url(ctx, component) + path
+    comp = _component(ctx, component)
+    url = comp.url + path
     try:
-        response = httpx.post(url, json=payload, timeout=timeout_s)
+        response = httpx.post(url, json=payload, timeout=timeout_s, headers=_auth_headers(comp))
     except httpx.HTTPError as exc:
         raise SkillError(f"generation service {url}: {exc.__class__.__name__}: {exc}") from exc
     if response.status_code >= 400:

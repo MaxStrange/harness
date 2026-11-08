@@ -1,0 +1,20 @@
+[Unit]
+Description=Super-resolution service (Real-ESRGAN x2/x4 via spandrel)
+Documentation=file:///home/max/superres/server.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=max
+SupplementaryGroups=render video
+WorkingDirectory=/home/max/superres
+Environment=SUPERRES_MODEL_DIR=/home/max/models/superres
+Environment=SUPERRES_KEY_FILE=/etc/evox3/llama-api-key
+Environment=SUPERRES_IDLE_UNLOAD_S=600
+ExecStart=/home/max/venvs/superres/bin/python -m uvicorn server:app --host 0.0.0.0 --port 18084
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

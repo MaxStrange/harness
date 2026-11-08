@@ -108,6 +108,15 @@ models:
         priority: 0
         exclusive: false
         load_timeout_s: 600
+      superres:                 # Real-ESRGAN x2/x4 in the super-resolution service
+        kind: service
+        name: superres
+        url: http://10.0.0.228:18084
+        api_key_file: ~/.harness/secrets/llama-api-key
+        gib: 3                  # 2.35 peak while upscaling 1152x2048 to 4x
+        priority: 0
+        exclusive: false
+        load_timeout_s: 600
 
 web:
   searxng_url: http://10.0.0.228:18082   # the only search backend; no fallback

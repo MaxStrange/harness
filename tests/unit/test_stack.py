@@ -224,7 +224,7 @@ def test_agent_restores_before_the_next_model_call(tmp_path, monkeypatch):
     stack = FakeStack()
     calls = []
 
-    def fake_post(url, json, timeout):
+    def fake_post(url, json, timeout, headers=None):
         calls.append((url, stack.dirty, stack.restores))
         png = base64.b64encode(b"\x89PNG fake").decode()
         return httpx.Response(200, json={"png_base64": png, "seed": 7, "seconds": 1.0})
@@ -276,7 +276,7 @@ def test_generate_3d_model_from_prompt_chains_image_then_mesh(tmp_path, monkeypa
     stack.acquire = lambda need, progress=None, cancel=None: needs.append(list(need))
     posted = []
 
-    def fake_post(url, json, timeout):
+    def fake_post(url, json, timeout, headers=None):
         posted.append(url)
         blob = base64.b64encode(b"data").decode()
         if url.endswith("/image"):
@@ -313,10 +313,101 @@ def test_generate_3d_model_needs_exactly_one_source(tmp_path):
 
 
 def test_generation_service_error_is_reported(tmp_path, monkeypatch):
-    def fake_post(url, json, timeout):
+    def fake_post(url, json, timeout, headers=None):
         return httpx.Response(500, json={"detail": "OutOfMemoryError: HIP out of memory"})
 
     monkeypatch.setattr("harness.skills.builtin._generation.httpx.post", fake_post)
     monkeypatch.setenv("HARNESS_HOME", str(tmp_path / "home"))
     outcome, _ = run_skill(tmp_path, "generate_image", {"prompt": "a cat"})
     assert not outcome.result.ok and "HIP out of memory" in outcome.result.content
+
+
+# -- upscale_image ----------------------------------------------------------------------
+
+
+class NeedsStack(FakeStack):
+    def __init__(self):
+        super().__init__()
+        self.needed = []
+
+    def acquire(self, need, progress=None, cancel=None):
+        super().acquire(need, progress, cancel)
+        self.needed.append(list(need))
+
+
+def _superres_home(tmp_path, monkeypatch, key="sk-superres"):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HARNESS_HOME", str(home))
+    if key is not None:
+        (home / "secrets").mkdir(parents=True)
+        (home / "secrets" / "llama-api-key").write_text(key + "\n", encoding="utf-8")
+    photo = tmp_path / "photo.jpg"
+    photo.write_bytes(b"\xff\xd8 fake jpeg")
+    return photo
+
+
+def _fake_superres(monkeypatch, calls):
+    def fake_post(url, json, timeout, headers=None):
+        calls.append({"url": url, "json": json, "headers": headers or {}})
+        png = base64.b64encode(b"\x89PNG upscaled").decode()
+        return httpx.Response(
+            200,
+            json={"png_base64": png, "width": 2304, "height": 4096, "seconds": 1.7},
+        )
+
+    monkeypatch.setattr("harness.skills.builtin._generation.httpx.post", fake_post)
+
+
+def test_upscale_image_writes_next_to_the_source_with_the_key(tmp_path, monkeypatch):
+    photo = _superres_home(tmp_path, monkeypatch)
+    calls = []
+    _fake_superres(monkeypatch, calls)
+    stack = NeedsStack()
+    outcome, ui = run_skill(tmp_path, "upscale_image", {"path": str(photo)}, stack=stack)
+    assert outcome.result.ok, outcome.result.content
+    target = tmp_path / "photo_x2.png"
+    assert target.read_bytes() == b"\x89PNG upscaled"
+    assert stack.needed == [["superres"]]
+    (call,) = calls
+    assert call["url"] == "http://10.0.0.228:18084/upscale"
+    assert call["headers"]["Authorization"] == "Bearer sk-superres"
+    assert call["json"]["scale"] == 2 and call["json"]["strength"] == 1.0
+    assert base64.b64decode(call["json"]["image_base64"]) == b"\xff\xd8 fake jpeg"
+    assert "2304x4096" in outcome.result.content
+    assert [str(h.target) for h in ui.opened] == [str(target)]
+
+
+def test_upscale_image_never_overwrites(tmp_path, monkeypatch):
+    photo = _superres_home(tmp_path, monkeypatch)
+    calls = []
+    _fake_superres(monkeypatch, calls)
+    (tmp_path / "photo_x4.png").write_bytes(b"keep me")
+    outcome, _ = run_skill(tmp_path, "upscale_image", {"path": str(photo), "scale": 4})
+    assert outcome.result.ok
+    assert (tmp_path / "photo_x4.png").read_bytes() == b"keep me"
+    assert (tmp_path / "photo_x4-2.png").exists()
+    taken = tmp_path / "mine.png"
+    taken.write_bytes(b"also keep")
+    outcome, _ = run_skill(tmp_path, "upscale_image", {"path": str(photo), "output": str(taken)})
+    assert not outcome.result.ok and "already exists" in outcome.result.content
+    assert taken.read_bytes() == b"also keep" and len(calls) == 1
+
+
+def test_upscale_image_reports_a_missing_key_file(tmp_path, monkeypatch):
+    photo = _superres_home(tmp_path, monkeypatch, key=None)
+    calls = []
+    _fake_superres(monkeypatch, calls)
+    outcome, _ = run_skill(tmp_path, "upscale_image", {"path": str(photo)})
+    assert not outcome.result.ok and "api_key_file" in outcome.result.content
+    assert calls == []
+
+
+def test_upscale_image_rejects_non_images_and_bad_scale(tmp_path, monkeypatch):
+    _superres_home(tmp_path, monkeypatch)
+    (tmp_path / "notes.txt").write_text("hi")
+    outcome, _ = run_skill(tmp_path, "upscale_image", {"path": str(tmp_path / "notes.txt")})
+    assert not outcome.result.ok and "not a supported image" in outcome.result.content
+    outcome, _ = run_skill(
+        tmp_path, "upscale_image", {"path": str(tmp_path / "photo.jpg"), "scale": 3}
+    )
+    assert not outcome.result.ok
