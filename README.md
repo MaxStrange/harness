@@ -14,8 +14,8 @@ Milestones 1 and 2 are implemented, plus most of milestone 3's skills:
   `ui.file_explorer: tree` as a plain fallback) and sessions panel with full-text search.
 - Model bring-up: streaming, native or text tool calling, stop, automatic and manual compaction,
   offline status without losing sessions.
-- All twenty skills from the requirements, each with its handoff, plus `generate_image` and
-  `generate_3d_model` (with model swapping on the LLM machine), `kicad_inspect` (schematic
+- All twenty skills from the requirements, each with its handoff, plus `generate_image`,
+  `generate_3d_model` and `upscale_image` (with model swapping on the LLM machine), `kicad_inspect` (schematic
   hierarchy, BOM, board, nets straight from KiCad files), `directory_tree` (a tree a few levels
   deep with big folders summarized) and `harness_settings` (ask the model to change the sprite).
 - Security: command approval with summarizer, protected paths, private-network blocking, web reader
@@ -64,7 +64,9 @@ may not read `~/.harness/secrets`, and `harness --check-config` reports a missin
 
 `generate_image` (FLUX.1-schnell) and `generate_3d_model` (Hunyuan3D-2mini, from an image or a
 prompt) run in a generation service on the LLM machine; see
-[servers/wally_gen/README.md](servers/wally_gen/README.md) for installing it. The LLMs already use
+[servers/wally_gen/README.md](servers/wally_gen/README.md) for installing it.
+`upscale_image` (Real-ESRGAN 2x/4x) runs in its own small service there; see
+[servers/wally_superres/README.md](servers/wally_superres/README.md). The LLMs already use
 most of that machine's memory, so `models.stack` in the config lists everything that can be
 resident, with its measured size and a budget. Before a generation skill runs, the harness unloads
 just enough to fit it, lowest `priority` first (the summarizer before the main model; the whole
